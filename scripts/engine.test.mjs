@@ -272,6 +272,32 @@ ok("never mutates the pool it was given", (() => {
 
 ok("handles an empty catalogue", rankModels([], PREF_EN).length === 0);
 
+// Straight from a real deployment's diagnosis: this key only sees nvidia models.
+const NVIDIA_POOL = [
+  M("nvidia/nemotron-3.5-lightning:free"),
+  M("nvidia/nemotron-3-ultra-550b-a55b:free"),
+  M("nvidia/nemotron-3-super-120b-a12b:free"),
+  M("nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"),
+];
+const PREF_REAL = ["glm-4","glm","deepseek-chat","deepseek-v3","qwen3","qwen",
+                   "nemotron-3.5","lightning","nemotron","llama-3.3"];
+
+ok("puts the explicitly-reasoning model LAST", (() => {
+  const r = rankModels(NVIDIA_POOL, PREF_REAL);
+  return r[r.length - 1].includes("reasoning");
+})());
+
+ok("still keeps the reasoning model as a fallback, not dropped",
+   rankModels(NVIDIA_POOL, PREF_REAL).length === 4);
+
+ok("prefers the fast nemotron when that is all there is",
+   rankModels(NVIDIA_POOL, PREF_REAL)[0].includes("lightning"));
+
+ok("a plain model always outranks a reasoning one of a better family", (() => {
+  const pool = [M("z-ai/glm-4-reasoning:free"), M("meta-llama/llama-3.3-70b:free")];
+  return rankModels(pool, PREF_REAL)[0].includes("llama");
+})());
+
 
 console.log("\n\x1b[1mLive catalogue parsing\x1b[0m");
 

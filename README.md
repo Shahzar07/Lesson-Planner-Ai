@@ -231,6 +231,34 @@ The teacher also sees this happening: the planner parses the partial JSON as it 
 and fills the objectives, stages and timings in live, so the wait reads as progress
 rather than a frozen screen.
 
+### Reasoning models
+
+Nemotron, DeepSeek R1, QwQ and their kin **think before they write**, and they stream
+that thinking on a different field: `delta.reasoning`, not `delta.content`. A client that
+watches only `content` sees total silence for however long the model reasons, concludes
+it is dead, and kills it.
+
+That is a real failure this app shipped with, and it produced a genuinely confusing pair
+of symptoms: the doctor reported the model healthy in 300ms while generation failed on
+the same model with *"sent nothing within 14s"*. The doctor was probing non-streaming
+with `max_tokens: 40`, so it never reached the reasoning phase at all.
+
+Both halves are fixed:
+
+- The stream reader counts `delta.reasoning` and `delta.reasoning_content` as proof of
+  life, so the first-token clock stops when the model starts thinking, while only
+  `content` is collected as the answer.
+- The doctor now probes exactly the way generation runs — streaming, forced JSON, a real
+  writing task — and reports **time to first word of answer**, not time to HTTP response.
+  A model that only ever thinks is reported as such instead of being called healthy.
+
+Reasoning models are also ranked last rather than dropped. They burn most of a free-tier
+budget before writing a word, but a slow plan beats no plan, so they stay as a fallback.
+
+`scripts/reasoning.test.mjs` stands up a fake OpenRouter that thinks for eight seconds
+before writing, which is longer than the client's first-token floor. Revert the fix and
+that suite fails with the production error verbatim.
+
 ### When it breaks
 
 Two diagnoses, because they answer different questions:

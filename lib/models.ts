@@ -35,15 +35,26 @@ interface CatalogueEntry {
  */
 const PREFER_EN = [
   "glm-4", "glm", "deepseek-chat", "deepseek-v3", "qwen3", "qwen",
-  "nemotron", "llama-3.3", "llama-4", "mistral-small", "gpt-oss", "kimi",
-  "deepseek-r1", "gemma", "mistral",
+  "nemotron-3.5", "lightning", "nemotron", "llama-3.3", "llama-4",
+  "mistral-small", "gpt-oss", "kimi", "deepseek-r1", "gemma", "mistral",
 ];
 
 /** Qwen and GLM handle Urdu script noticeably better than the Llama family. */
 const PREFER_UR = [
   "qwen3", "qwen", "glm-4", "glm", "deepseek-chat", "deepseek-v3",
-  "gemini", "nemotron", "llama-3.3", "llama-4", "deepseek-r1", "gemma", "mistral",
+  "gemini", "nemotron-3.5", "lightning", "nemotron", "llama-3.3", "llama-4",
+  "deepseek-r1", "gemma", "mistral",
 ];
+
+/**
+ * Pushed to the back rather than dropped.
+ *
+ * A reasoning model spends its budget thinking before it writes a word. For a
+ * 1,800-token structured plan on a free tier that is most of the wall clock
+ * gone before any output appears, so prefer a model that just answers. They
+ * stay in the chain as a fallback because a slow plan beats no plan.
+ */
+const DEPRIORITISE = ["reasoning", "thinking", "-r1", "qwq", "-preview", "experimental"];
 
 /** Free models that exist but cannot write a lesson plan. */
 const EXCLUDE = [
@@ -76,7 +87,8 @@ const usable = (m: CatalogueEntry) => {
 export async function fetchFreeModels(signal?: AbortSignal): Promise<FreeModel[]> {
   if (cache && Date.now() - cache.at < TTL_MS) return cache.models;
 
-  const res = await fetch("https://openrouter.ai/api/v1/models", {
+  const base = (process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1").replace(/\/$/, "");
+  const res = await fetch(`${base}/models`, {
     signal,
     headers: { Accept: "application/json" },
   });
@@ -100,7 +112,11 @@ export function rankModels(models: FreeModel[], preference: string[]): string[] 
   const score = (id: string) => {
     const lower = id.toLowerCase();
     const i = preference.findIndex((f) => lower.includes(f));
-    return i === -1 ? preference.length : i;
+    const base = i === -1 ? preference.length : i;
+    // One full preference-list length, so any plain model outranks any
+    // reasoning model, but the ordering within each group is preserved.
+    const penalty = DEPRIORITISE.some((d) => lower.includes(d)) ? preference.length + 1 : 0;
+    return base + penalty;
   };
   return [...models]
     .sort((a, b) => score(a.id) - score(b.id) || b.context - a.context)

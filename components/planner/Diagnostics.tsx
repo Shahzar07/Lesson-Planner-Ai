@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-interface Probe { model: string; ok: boolean; ms: number; status?: number; reason?: string }
+interface Probe { model: string; ok: boolean; ms: number; ttfc?: number; status?: number; reason?: string; reasoningOnly?: boolean }
 interface Report {
   ok: boolean;
   keyConfigured: boolean;
@@ -14,6 +14,7 @@ interface Report {
   probes?: Probe[];
   fastest?: string | null;
   suggestedEnv?: Record<string, string> | null;
+  allFree?: string[];
 }
 
 /**
@@ -122,7 +123,9 @@ export default function Diagnostics({
                 <div key={p.model} className="flex items-center gap-2 text-[11px]">
                   <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${p.ok ? "bg-emerald" : "bg-[#c0392b]"}`} />
                   <span className="flex-1 truncate font-mono text-ink">{p.model}</span>
-                  <span className="shrink-0 text-faint">{p.ok ? `${p.ms} ms` : p.reason}</span>
+                  <span className="shrink-0 text-faint">
+                    {p.ok ? `first word in ${((p.ttfc ?? p.ms) / 1000).toFixed(1)}s` : p.reason}
+                  </span>
                 </div>
               ))}
             </div>
@@ -142,6 +145,24 @@ export default function Diagnostics({
                 </p>
               )}
             </div>
+          )}
+
+          {report.allFree && report.allFree.length > 0 && (
+            <details className="border-t border-line pt-2">
+              <summary className="cursor-pointer text-[11.5px] font-medium text-muted">
+                Every free model your key can see ({report.allFree.length})
+              </summary>
+              <p className="mt-1 text-[11px] leading-relaxed text-faint">
+                Ranked as the app would try them. Anything marked
+                <span className="mx-1 rounded bg-wash px-1 font-mono">reasoning</span>
+                thinks before it writes, so it is tried last.
+              </p>
+              <ul className="mt-1.5 max-h-44 space-y-0.5 overflow-y-auto thin-scroll">
+                {report.allFree.map((id) => (
+                  <li key={id} className="truncate font-mono text-[10.5px] text-muted">{id}</li>
+                ))}
+              </ul>
+            </details>
           )}
 
           {envText && (

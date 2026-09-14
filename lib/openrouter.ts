@@ -1,6 +1,8 @@
 import { resolveChain } from "@/lib/models";
 
-const ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
+/** Overridable so a fake gateway can be pointed at in tests, or a proxy in prod. */
+const BASE = (process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1").replace(/\/$/, "");
+const ENDPOINT = `${BASE}/chat/completions`;
 
 export interface ChatOptions {
   system: string;
@@ -160,7 +162,7 @@ function budget(o: ChatOptions, modelsLeft: number) {
     : Math.max(6_000, Math.min(cap, Math.floor(remaining / Math.max(1, Math.min(modelsLeft, 2)))));
   return {
     totalMs: share,
-    ttftMs: Math.max(4_000, Math.min(o.ttftMs ?? 14_000, share)),
+    ttftMs: Math.max(6_000, Math.min(o.ttftMs ?? 20_000, share)),
     expired: remaining <= 1_500,
   };
 }
@@ -199,6 +201,7 @@ export async function* streamChat(
       const g = guard(b.ttftMs, b.totalMs, o.signal);
       const t0 = Date.now();
       let emitted = 0;
+      let thought = 0;
       try {
         const res = await fetch(ENDPOINT, {
           method: "POST",
@@ -211,12 +214,12 @@ export async function* streamChat(
           const raw = await res.text().catch(() => "");
           const { reason, fatal, hint } = classify(res.status, raw);
           g.done();
-          const jsonIssue = reason.includes("forced JSON");
-          if (!jsonIssue || !forceJson) {
-            attempts.push({ model, ok: false, status: res.status, reason, ms: Date.now() - t0 });
-          }
-          if (fatal) throw new OpenRouterError(reason, res.status, attempts, true, hint);
-          if (forceJson && jsonIssue) continue;
+          if (fatal) { g.done(); throw new OpenRouterError(reason, res.status, attempts, true, hint); }
+          // A plain retry costs little and clears a whole class of provider
+          // quirks: unsupported response_format, rejected extra params, a
+          // transient 5xx. Only record the failure once both shapes have failed.
+          if (forceJson) continue;
+          attempts.push({ model, ok: false, status: res.status, reason, ms: Date.now() - t0 });
           break;
         }
 
@@ -239,13 +242,35 @@ export async function* streamChat(
             if (payload === "[DONE]") continue;
             try {
               const json = JSON.parse(payload);
-              const delta: string | undefined = json?.choices?.[0]?.delta?.content;
+
+              // OpenRouter can report a provider failure inside the stream.
+              if (json?.error) {
+                throw new OpenRouterError(
+                  String(json.error?.message ?? "provider error mid-stream"),
+                  Number(json.error?.code) || undefined,
+                );
+              }
+
+              const d = json?.choices?.[0]?.delta;
+
+              // Reasoning models (Nemotron, R1, QwQ and friends) think first and
+              // emit those tokens on a DIFFERENT field. Reading only `content`
+              // made a model that was working perfectly look like it had sent
+              // nothing, and the first-token timer then killed it.
+              const thinking: string | undefined = d?.reasoning ?? d?.reasoning_content;
+              if (thinking) {
+                thought += thinking.length;
+                g.alive();
+              }
+
+              const delta: string | undefined = d?.content;
               if (delta) {
                 if (emitted === 0) g.alive();
                 emitted += delta.length;
                 yield { type: "delta", text: delta };
               }
-            } catch {
+            } catch (e) {
+              if (e instanceof OpenRouterError) throw e;
               /* keep-alive comments and partial frames */
             }
           }
@@ -253,7 +278,13 @@ export async function* streamChat(
 
         g.done();
         if (emitted > 0) return;
-        attempts.push({ model, ok: false, reason: "returned an empty response", ms: Date.now() - t0 });
+        if (forceJson) continue;   // try the same model without forced JSON
+        attempts.push({
+          model, ok: false, ms: Date.now() - t0,
+          reason: thought > 0
+            ? "spent the whole budget thinking without writing an answer"
+            : "returned an empty response",
+        });
         break;
       } catch (err) {
         g.done();
@@ -264,11 +295,13 @@ export async function* streamChat(
         // a mostly-written plan beats an error message, and the route repairs
         // the truncated JSON.
         if (emitted > 0) return;
+        if (forceJson) continue;   // try the same model without forced JSON
 
         const why = err instanceof Error && err.message === "ttft"
           ? `sent nothing within ${Math.round(b.ttftMs / 1000)}s`
           : err instanceof Error && err.message === "timeout"
-            ? "timed out"
+            ? thought > 0 ? "still thinking when the time ran out" : "timed out"
+            : err instanceof OpenRouterError ? err.message
             : "could not be reached";
         attempts.push({ model, ok: false, ms: Date.now() - t0, reason: why });
         break;
@@ -313,15 +346,22 @@ export async function chat(o: ChatOptions): Promise<{ text: string; model: strin
 
         if (!res.ok) {
           const { reason, fatal, hint } = classify(res.status, raw);
-          attempts.push({ model, ok: false, status: res.status, reason, ms: Date.now() - t0 });
           if (fatal) throw new OpenRouterError(reason, res.status, attempts, true, hint);
-          if (forceJson && reason.includes("forced JSON")) continue;
+          if (forceJson) continue;
+          attempts.push({ model, ok: false, status: res.status, reason, ms: Date.now() - t0 });
           break;
         }
 
-        const text = JSON.parse(raw)?.choices?.[0]?.message?.content ?? "";
+        const msg = JSON.parse(raw)?.choices?.[0]?.message;
+        const text = msg?.content ?? "";
         if (text.trim()) return { text, model };
-        attempts.push({ model, ok: false, reason: "returned an empty message", ms: Date.now() - t0 });
+        if (forceJson) continue;
+        attempts.push({
+          model, ok: false, ms: Date.now() - t0,
+          reason: msg?.reasoning || msg?.reasoning_content
+            ? "answered with reasoning only, no content"
+            : "returned an empty message",
+        });
         break;
       } catch (err) {
         g.done();

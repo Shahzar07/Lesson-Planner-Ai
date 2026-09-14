@@ -65,9 +65,15 @@ hallucinated field cannot reach a teacher's lesson plan.
 
 ## Working on the app itself
 
-- `npm test` runs the accuracy engine suite (no network needed) — 90 checks covering
-  every rubric rule, the tolerant JSON parser, the patch layer, model discovery and
-  truncation salvage. Add a case here whenever you add or change a rubric check.
+- `npm test` runs two suites with no network: 94 unit checks, plus
+  `scripts/reasoning.test.mjs`, which stands up a fake OpenRouter to cover streaming covering
+  behaviour. Between them they cover every rubric rule, the tolerant JSON parser, the
+  patch layer, model discovery, truncation salvage and reasoning-model streaming.
+  Add a case whenever you add or change a rubric check.
+- Reasoning models stream on `delta.reasoning`, not `delta.content`. Never treat an
+  absent `content` token as a dead model, and never let a diagnostic probe differ from
+  how generation actually calls the API — that combination hid a production bug behind
+  a green health check.
 - Output size is the latency budget. Before adding a field to the schema in
   `lib/skill/index.ts`, remember every ~40 tokens costs a teacher another second on a
   free model. Fields only one format renders belong behind that format's branch.

@@ -19,6 +19,7 @@
     "lib/types.ts",
     "lib/patch.ts",
     "lib/models.ts",
-    "lib/salvage.ts"
+    "lib/salvage.ts",
+    "lib/openrouter.ts"
   ]
 }
