@@ -17,6 +17,7 @@
     "lib/validator.ts",
     "lib/partial-json.ts",
     "lib/types.ts",
-    "lib/patch.ts"
+    "lib/patch.ts",
+    "lib/models.ts"
   ]
 }

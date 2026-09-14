@@ -101,7 +101,17 @@ export async function POST(req: NextRequest) {
           maxTokens: 9000,
           temperature: 0.4,
         })) {
-          if (ev.type === "model") {
+          if (ev.type === "chain") {
+            send({
+              type: "status",
+              message:
+                ev.source === "live"
+                  ? `Picking from ${ev.chain.length} free models available now`
+                  : ev.source === "env"
+                    ? "Using the models pinned in your environment"
+                    : "Live model list unavailable, trying the fallback list",
+            });
+          } else if (ev.type === "model") {
             usedModel = ev.model;
             send({ type: "model", model: ev.model });
           } else {
@@ -173,13 +183,11 @@ export async function POST(req: NextRequest) {
           elapsedMs: Date.now() - started,
         });
       } catch (err) {
-        const message =
-          err instanceof OpenRouterError
-            ? err.message
-            : err instanceof Error
-              ? err.message
-              : "Generation failed.";
-        send({ type: "error", message });
+        if (err instanceof OpenRouterError) {
+          send({ type: "error", message: err.message, hint: err.hint, attempts: err.attempts });
+        } else {
+          send({ type: "error", message: err instanceof Error ? err.message : "Generation failed." });
+        }
       } finally {
         controller.close();
       }

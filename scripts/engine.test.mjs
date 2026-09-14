@@ -1,6 +1,7 @@
 import { validate, autoBalance } from "../.test-build/validator.js";
 import { parseLoose, repairPartial, extract } from "../.test-build/partial-json.js";
 import { applyEdits, getAt, parsePointer, buildIndex, sectionOf } from "../.test-build/patch.js";
+import { rankModels, fetchFreeModels, resolveChain, SEED } from "../.test-build/models.js";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = "") => {
@@ -230,6 +231,135 @@ ok("indexes every leaf as a pointer", idx.length > 60, `got ${idx.length}`);
 ok("indexes an objective's text", idx.some(l => l.startsWith("/objectives/0/text = ")));
 ok("truncates long values", idx.every(l => l.length < 200));
 ok("every indexed path resolves", idx.every(l => getAt(GOOD, l.split(" = ")[0]) !== undefined));
+
+
+console.log("\n\x1b[1mModel ranking\x1b[0m");
+const M = (id, context = 64000) => ({ id, name: id, context });
+const PREF_EN = ["deepseek-chat","deepseek-v3","glm-4","glm","qwen3","qwen","llama-3.3","nemotron","mistral-small"];
+const PREF_UR = ["qwen3","qwen","glm-4","glm","deepseek-chat"];
+
+ok("prefers a named family over an unknown one",
+  rankModels([M("someone/unknown-model:free"), M("z-ai/glm-4.6:free")], PREF_EN)[0] === "z-ai/glm-4.6:free");
+
+ok("puts Qwen first for Urdu, GLM first for English", (() => {
+  const pool = [M("z-ai/glm-4.6:free"), M("qwen/qwen3-max:free"), M("meta-llama/llama-3.3-70b:free")];
+  return rankModels(pool, PREF_UR)[0].includes("qwen") && rankModels(pool, PREF_EN)[0].includes("glm");
+})());
+
+ok("matches a future version of a known family", (() => {
+  // the whole point: qwen4 should rank like qwen3 without a code change
+  const pool = [M("someone/unknown:free"), M("qwen/qwen4-500b:free")];
+  return rankModels(pool, PREF_UR)[0] === "qwen/qwen4-500b:free";
+})());
+
+ok("breaks ties on context length", (() => {
+  const r = rankModels([M("z-ai/glm-4-air:free", 32000), M("z-ai/glm-4-plus:free", 200000)], PREF_EN);
+  return r[0] === "z-ai/glm-4-plus:free";
+})());
+
+ok("keeps unknown models rather than dropping them", (() => {
+  const pool = [M("a/unknown-one:free"), M("b/unknown-two:free")];
+  return rankModels(pool, PREF_EN).length === 2;
+})());
+
+ok("never mutates the pool it was given", (() => {
+  const pool = [M("z/b:free"), M("a/glm-4:free")];
+  const before = pool.map(m => m.id).join(",");
+  rankModels(pool, PREF_EN);
+  return pool.map(m => m.id).join(",") === before;
+})());
+
+ok("handles an empty catalogue", rankModels([], PREF_EN).length === 0);
+
+
+console.log("\n\x1b[1mLive catalogue parsing\x1b[0m");
+
+const entry = (id, over = {}) => ({
+  id, name: id, context_length: 64000,
+  pricing: { prompt: "0", completion: "0" },
+  architecture: { input_modalities: ["text"], output_modalities: ["text"] },
+  ...over,
+});
+const realFetch = globalThis.fetch;
+const stub = (payload, opts = {}) => {
+  globalThis.fetch = async () => ({
+    ok: opts.ok !== false,
+    status: opts.status ?? 200,
+    json: async () => payload,
+  });
+};
+const restore = () => { globalThis.fetch = realFetch; };
+// fetchFreeModels caches per module; bust it by advancing nothing and using
+// distinct assertions on one fetch where possible.
+const fresh = async (payload, opts) => {
+  stub(payload, opts);
+  const mod = await import(`../.test-build/models.js?bust=${Math.random()}`);
+  return mod;
+};
+
+{
+  const m = await fresh({ data: [
+    entry("z-ai/glm-4.6:free"),
+    entry("paid/expensive", { pricing: { prompt: "0.0000015", completion: "0.000002" } }),
+    entry("meta-llama/llama-guard-4:free"),
+    entry("tiny/model:free", { context_length: 4096 }),
+    entry("some/embedder:free"),
+    entry("qwen/qwen3-max:free"),
+  ]});
+  const free = await m.fetchFreeModels();
+  const ids = free.map(f => f.id);
+  ok("keeps genuinely free models", ids.includes("z-ai/glm-4.6:free") && ids.includes("qwen/qwen3-max:free"));
+  ok("drops paid models", !ids.includes("paid/expensive"));
+  ok("drops safety-classifier models", !ids.some(i => i.includes("guard")));
+  ok("drops embedding models", !ids.some(i => i.includes("embed")));
+  ok("drops context windows too small for a lesson plan", !ids.includes("tiny/model:free"));
+  restore();
+}
+
+{
+  // A model priced "0" without the :free suffix still counts as free.
+  const m = await fresh({ data: [entry("vendor/zero-cost-model")] });
+  const free = await m.fetchFreeModels();
+  ok("detects free by price, not just the :free suffix", free.length === 1);
+  restore();
+}
+
+{
+  const m = await fresh({ data: [entry("image/only:free", { architecture: { output_modalities: ["image"] } })] });
+  ok("drops models that cannot output text", (await m.fetchFreeModels()).length === 0);
+  restore();
+}
+
+{
+  // catalogue down -> must fall back to the seed, never throw at the caller
+  globalThis.fetch = async () => { throw new Error("ENETUNREACH"); };
+  const m = await import(`../.test-build/models.js?bust=${Math.random()}`);
+  const r = await m.resolveChain("en");
+  ok("falls back to the seed when the catalogue is unreachable",
+     r.source === "seed" && r.chain.length > 0);
+  ok("says why it fell back", typeof r.note === "string" && r.note.includes("ENETUNREACH"));
+  restore();
+}
+
+{
+  const m = await fresh({ data: [entry("z-ai/glm-4.6:free"), entry("qwen/qwen3-max:free")] });
+  const r = await m.resolveChain("ur");
+  ok("uses the live catalogue when reachable", r.source === "live");
+  ok("ranks Qwen first for Urdu from live data", r.chain[0].includes("qwen"));
+  restore();
+}
+
+{
+  process.env.SABAQ_MODELS_EN = "pinned/one:free,pinned/two:free";
+  const m = await import(`../.test-build/models.js?bust=${Math.random()}`);
+  const r = await m.resolveChain("en");
+  ok("an env override wins over discovery",
+     r.source === "env" && r.chain[0] === "pinned/one:free");
+  delete process.env.SABAQ_MODELS_EN;
+  restore();
+}
+
+ok("the seed is only a fallback, and is non-empty", Array.isArray(SEED) && SEED.length >= 5);
 
 console.log(`\n\x1b[1m${pass} passed, ${fail} failed\x1b[0m\n`);
 process.exit(fail ? 1 : 0);

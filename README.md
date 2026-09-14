@@ -153,44 +153,65 @@ The same rules are mirrored as a Claude Code skill in
 
 ## Model routing
 
-Two chains, because the best free model for English is not the best for Urdu. Qwen3 is
-markedly stronger in Urdu script; DeepSeek V3 is faster and tighter on structured JSON
-in English. Each chain fails over left to right when a model is rate-limited or cold.
+**Nothing here hardcodes a model id as gospel.** OpenRouter's free tier churns
+constantly: ids get renamed and withdrawn, and a withdrawn model answers
+`404 No endpoints found`, which looks exactly like a broken key to the teacher staring
+at the screen.
+
+So the app asks OpenRouter what is actually free right now, then ranks whatever comes
+back by **family** rather than exact id:
 
 ```
-English:  deepseek-chat-v3 → llama-3.3-70b → glm-4.5-air → mistral-small-3.2 → gemini-2.0-flash
-Urdu:     qwen3-235b → deepseek-chat-v3 → gemini-2.0-flash → llama-3.3-70b
+English:  glm → deepseek-chat → qwen3 → nemotron → llama-3.3 → mistral → gpt-oss
+Urdu:     qwen3 → glm → deepseek-chat → gemini → nemotron → llama-3.3
 ```
 
-Free-model availability changes week to week, so trust `npm run doctor` over any list:
-it probes your key against every candidate and prints a chain built from the ones that
-actually answered.
+Because the match is a substring, a version bump from `qwen3-235b` to `qwen4-400b` needs
+no code change at all. Qwen and GLM lead the Urdu chain because they handle Urdu script
+noticeably better than the Llama family.
+
+The catalogue is filtered on the way in: paid models, safety classifiers, embedding and
+rerank models, image-only models, and anything with a context window too small to hold
+the skill plus a full plan are all dropped. Free is detected by **price**, not by the
+`:free` suffix alone.
+
+Each request then walks that chain, and a model that 404s, rate-limits or times out
+hands off to the next one. A model that rejects `response_format: json_object` is
+retried once without it, since the tolerant parser copes either way.
+
+If you want to pin exact ids anyway, an environment override always wins:
 
 ```bash
-SABAQ_MODELS_EN=deepseek/deepseek-chat-v3-0324:free,...   # in .env.local
-SABAQ_MODELS_UR=qwen/qwen3-235b-a22b:free,...
+SABAQ_MODELS_EN=z-ai/glm-4.6:free,qwen/qwen3-max:free
+SABAQ_MODELS_UR=qwen/qwen3-max:free,z-ai/glm-4.6:free
 ```
 
-## Typography
+### When it breaks
 
-Two self-hosted variable fonts, wired through `next/font/local` in `app/layout.tsx`:
+Two diagnoses, because they answer different questions:
 
-| Role | Face | Why |
-|---|---|---|
-| Display | **Bricolage Grotesque** 800 | Tight, heavy, optically sized. Holds its density at 72px where a neutral UI face goes limp. |
-| Text / UI | **Plus Jakarta Sans** 400–800 | Legible at 11–16px, which Bricolage is not. |
-| Urdu | **Noto Nastaliq Urdu** | Proper Nastaliq for the سبقی خاکہ, not a naskh fallback. |
+| | What it tests |
+|---|---|
+| `npm run doctor` | the machine you run it on |
+| `https://your-app/api/doctor` | **the deployed server** — its key, its network, the account's privacy setting |
 
-Self-hosted rather than linked, which matters here: there is no render-blocking request
-to a font CDN, no third-party DNS lookup on a slow Pakistani mobile connection, and no
-flash of fallback text. `next/font/local` fingerprints the files, preloads them and
-derives fallback metrics so nothing shifts when they swap in. The Urdu face carries
-`preload: false`, so its 239 KB only downloads on a page that actually renders Urdu.
+A key in `.env.local` never reaches production, so for a deployed app always use the
+endpoint (or click **Run diagnosis on the server** in the planner's error panel). Both
+read the live catalogue, probe the top models with a real completion, and print a
+ready-to-paste `SABAQ_MODELS_*` chain built from whatever actually answered.
 
-Three CSS classes carry the system: `.display` (hero and section headings),
-`.display-sm` (card and panel headings) and `.wordmark` (the brand lockups). The
-`--ff-*` variables injected by `next/font` are deliberately named apart from Tailwind's
-`--font-*` theme tokens, which are defined in `@theme` and cannot reference themselves.
+The error panel names the cause rather than saying "failed", and the three that account
+for nearly everything are:
+
+- **`404 No endpoints found` on every model** — usually not the models. Free models
+  require prompt logging to be permitted: open
+  <https://openrouter.ai/settings/privacy> and enable the free-model training and
+  publication option.
+- **`401`** — the key is wrong or was rotated. Update `OPENROUTER_API_KEY` in your
+  host's environment variables and **redeploy**; editing `.env.local` changes nothing in
+  production.
+- **`429` on everything** — free models are shared and go busy. Wait a minute, or pin a
+  chain with `SABAQ_MODELS_EN`.
 
 ## Project layout
 

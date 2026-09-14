@@ -65,12 +65,16 @@ hallucinated field cannot reach a teacher's lesson plan.
 
 ## Working on the app itself
 
-- `npm test` runs the accuracy engine suite (no network needed) — 50 checks covering
-  every rubric rule, the tolerant JSON parser and the patch layer. Add a case here
-  whenever you add or change a rubric check.
+- `npm test` runs the accuracy engine suite (no network needed) — 70 checks covering
+  every rubric rule, the tolerant JSON parser, the patch layer and model discovery.
+  Add a case here whenever you add or change a rubric check.
 - `lib/sample-plan.ts` is a complete plan that must score 100. If a rubric change makes
   it score lower, fix the sample, not the check.
-- `npm run doctor` probes the configured OpenRouter key and prints a model chain built
-  from whatever actually answered.
+- `npm run doctor` probes the local key; `GET /api/doctor` probes the **deployed**
+  server, which is the only one that can answer whether production works.
+- Never hardcode an OpenRouter model id as the source of truth. `lib/models.ts`
+  discovers free models at runtime and ranks them by family substring, so a version
+  bump needs no code change. `SEED` is a fallback for when the catalogue is
+  unreachable, not a list to keep current.
 - Changing a rubric check means changing three places in step: `lib/validator.ts`,
   `lib/skill/knowledge/quality-rubric.md`, and `scripts/engine.test.mjs`.

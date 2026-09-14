@@ -1,4 +1,4 @@
-import { chainFor } from "@/lib/models";
+import { resolveChain } from "@/lib/models";
 
 const ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -14,8 +14,23 @@ export interface ChatOptions {
   timeoutMs?: number;
 }
 
+export interface Attempt {
+  model: string;
+  ok: boolean;
+  status?: number;
+  reason?: string;
+  ms: number;
+}
+
 export class OpenRouterError extends Error {
-  constructor(message: string, readonly status?: number, readonly attempts: string[] = []) {
+  constructor(
+    message: string,
+    readonly status?: number,
+    readonly attempts: Attempt[] = [],
+    /** true when retrying other models cannot possibly help */
+    readonly fatal = false,
+    readonly hint?: string,
+  ) {
     super(message);
     this.name = "OpenRouterError";
   }
@@ -25,7 +40,9 @@ function headers() {
   const key = process.env.OPENROUTER_API_KEY;
   if (!key) {
     throw new OpenRouterError(
-      "OPENROUTER_API_KEY is not set. Copy .env.example to .env.local and add your key from https://openrouter.ai/keys",
+      "OPENROUTER_API_KEY is not set on the server.",
+      undefined, [], true,
+      "Add OPENROUTER_API_KEY in your host's environment variables (Vercel: Project → Settings → Environment Variables) and redeploy.",
     );
   }
   return {
@@ -36,14 +53,59 @@ function headers() {
   };
 }
 
-function body(o: ChatOptions, model: string, stream: boolean) {
+/**
+ * Turn an OpenRouter failure into something a teacher can act on, and decide
+ * whether trying the next model could possibly help.
+ */
+function classify(status: number, raw: string): { reason: string; fatal: boolean; hint?: string } {
+  const body = raw.toLowerCase();
+
+  if (status === 401) {
+    return {
+      reason: "the API key was rejected",
+      fatal: true,
+      hint: "Generate a fresh key at https://openrouter.ai/keys, then update OPENROUTER_API_KEY in your host's environment variables and redeploy.",
+    };
+  }
+  if (status === 402) {
+    return {
+      reason: "the account is out of credits",
+      fatal: true,
+      hint: "Free models still need a funded-or-zero balance in good standing. Check https://openrouter.ai/credits.",
+    };
+  }
+  // The single most common free-tier failure, and it looks like a dead model.
+  if (body.includes("data policy") || body.includes("data_policy")) {
+    return {
+      reason: "blocked by your OpenRouter privacy settings",
+      fatal: true,
+      hint: "Free models require prompt logging to be allowed. Open https://openrouter.ai/settings/privacy and enable the free-model training/publication option, then try again.",
+    };
+  }
+  if (status === 404) {
+    return { reason: "this model no longer exists on OpenRouter", fatal: false };
+  }
+  if (status === 429) {
+    return { reason: "rate limited right now", fatal: false };
+  }
+  if (status === 400 && (body.includes("response_format") || body.includes("json"))) {
+    return { reason: "does not support forced JSON output", fatal: false };
+  }
+  if (status >= 500) {
+    return { reason: `provider error (${status})`, fatal: false };
+  }
+  return { reason: `HTTP ${status}`, fatal: false };
+}
+
+function buildBody(o: ChatOptions, model: string, stream: boolean, forceJson: boolean) {
   return JSON.stringify({
     model,
     stream,
     temperature: o.temperature ?? 0.4,
     max_tokens: o.maxTokens ?? 8000,
-    // Nudges models that support it; the rest are handled by the tolerant parser.
-    response_format: { type: "json_object" },
+    // Dropped on the retry: several free models 400 on this, and the tolerant
+    // parser in lib/partial-json.ts copes without it.
+    ...(forceJson ? { response_format: { type: "json_object" } } : {}),
     messages: [
       { role: "system", content: o.system },
       { role: "user", content: o.user },
@@ -51,7 +113,6 @@ function body(o: ChatOptions, model: string, stream: boolean) {
   });
 }
 
-/** Merge an external abort signal with a per-model timeout. */
 function guard(timeoutMs: number, external?: AbortSignal) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(new Error("timeout")), timeoutMs);
@@ -69,126 +130,157 @@ function guard(timeoutMs: number, external?: AbortSignal) {
   };
 }
 
+const summarise = (attempts: Attempt[]) =>
+  attempts.map((a) => `${a.model.split("/").pop()}: ${a.reason ?? "failed"}`).join("; ");
+
 /**
- * Stream a completion, failing over through the model chain.
- * Yields `{ type: "model" }` first so the UI can name the model it got,
- * then a run of `{ type: "delta" }`.
+ * Stream a completion, failing over through the live model chain.
+ * Yields `{ type: "model" }` first so the UI can name the model it got.
  */
 export async function* streamChat(
   o: ChatOptions,
-): AsyncGenerator<{ type: "model"; model: string } | { type: "delta"; text: string }> {
-  const chain = chainFor(o.language, o.preferredModel);
-  const attempts: string[] = [];
-  let lastError: unknown;
+): AsyncGenerator<
+  | { type: "model"; model: string }
+  | { type: "delta"; text: string }
+  | { type: "chain"; chain: string[]; source: string; note?: string }
+> {
+  const h = headers();
+  const { chain, source, note } = await resolveChain(o.language, o.preferredModel, o.signal);
+  yield { type: "chain", chain, source, note };
+
+  const attempts: Attempt[] = [];
 
   for (const model of chain) {
-    attempts.push(model);
-    const g = guard(o.timeoutMs ?? 90_000, o.signal);
-    try {
-      const res = await fetch(ENDPOINT, {
-        method: "POST",
-        headers: headers(),
-        body: body(o, model, true),
-        signal: g.signal,
-      });
+    // Try with forced JSON, then once more without it if that is what broke.
+    for (const forceJson of [true, false]) {
+      const g = guard(o.timeoutMs ?? 90_000, o.signal);
+      const t0 = Date.now();
+      try {
+        const res = await fetch(ENDPOINT, {
+          method: "POST",
+          headers: h,
+          body: buildBody(o, model, true, forceJson),
+          signal: g.signal,
+        });
 
-      if (!res.ok || !res.body) {
-        lastError = new OpenRouterError(
-          `${model} returned ${res.status}: ${(await res.text().catch(() => "")).slice(0, 300)}`,
-          res.status,
-        );
-        g.done();
-        // 401/403 are key problems, not model problems. Stop immediately.
-        if (res.status === 401 || res.status === 403) throw lastError;
-        continue;
-      }
+        if (!res.ok || !res.body) {
+          const raw = await res.text().catch(() => "");
+          const { reason, fatal, hint } = classify(res.status, raw);
+          g.done();
+          const retryable = !forceJson || !reason.includes("forced JSON");
+          if (retryable) attempts.push({ model, ok: false, status: res.status, reason, ms: Date.now() - t0 });
+          if (fatal) throw new OpenRouterError(reason, res.status, attempts, true, hint);
+          if (forceJson && reason.includes("forced JSON")) continue; // retry without it
+          break; // next model
+        }
 
-      yield { type: "model", model };
+        yield { type: "model", model };
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let emitted = 0;
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let emitted = 0;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        // SSE frames are separated by a blank line.
-        let idx: number;
-        while ((idx = buffer.indexOf("\n")) !== -1) {
-          const line = buffer.slice(0, idx).trim();
-          buffer = buffer.slice(idx + 1);
-          if (!line.startsWith("data:")) continue;
-          const payload = line.slice(5).trim();
-          if (payload === "[DONE]") continue;
-          try {
-            const json = JSON.parse(payload);
-            const delta: string | undefined = json?.choices?.[0]?.delta?.content;
-            if (delta) {
-              emitted += delta.length;
-              yield { type: "delta", text: delta };
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let idx: number;
+          while ((idx = buffer.indexOf("\n")) !== -1) {
+            const line = buffer.slice(0, idx).trim();
+            buffer = buffer.slice(idx + 1);
+            if (!line.startsWith("data:")) continue;
+            const payload = line.slice(5).trim();
+            if (payload === "[DONE]") continue;
+            try {
+              const json = JSON.parse(payload);
+              const delta: string | undefined = json?.choices?.[0]?.delta?.content;
+              if (delta) {
+                emitted += delta.length;
+                yield { type: "delta", text: delta };
+              }
+            } catch {
+              /* keep-alive comments and partial frames */
             }
-          } catch {
-            /* OpenRouter sends keep-alive comments; ignore unparseable frames. */
           }
         }
-      }
 
-      g.done();
-      if (emitted > 0) return;
-      lastError = new OpenRouterError(`${model} streamed an empty response`);
-    } catch (err) {
-      g.done();
-      if (o.signal?.aborted) throw err;
-      if (err instanceof OpenRouterError && (err.status === 401 || err.status === 403)) throw err;
-      lastError = err;
+        g.done();
+        if (emitted > 0) return;
+        attempts.push({ model, ok: false, reason: "returned an empty response", ms: Date.now() - t0 });
+        break;
+      } catch (err) {
+        g.done();
+        if (o.signal?.aborted) throw err;
+        if (err instanceof OpenRouterError && err.fatal) throw err;
+        attempts.push({
+          model, ok: false, ms: Date.now() - t0,
+          reason: err instanceof Error && err.message === "timeout" ? "timed out" : "could not be reached",
+        });
+        break;
+      }
     }
   }
 
   throw new OpenRouterError(
-    `All models failed. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+    `No free model could complete the request. Tried ${attempts.length}: ${summarise(attempts)}`,
     undefined,
     attempts,
+    false,
+    source === "seed"
+      ? "The live model list could not be read, so a fallback list was used. Check your server's outbound network access to openrouter.ai."
+      : "Free models are shared and go busy. Wait a minute and try again, or pin a model with SABAQ_MODELS_EN in your environment.",
   );
 }
 
-/** Non-streaming completion, same failover. Used by the repair pass. */
+/** Non-streaming completion, same failover. Used by the repair and edit passes. */
 export async function chat(o: ChatOptions): Promise<{ text: string; model: string }> {
-  const chain = chainFor(o.language, o.preferredModel);
-  let lastError: unknown;
+  const h = headers();
+  const { chain, source } = await resolveChain(o.language, o.preferredModel, o.signal);
+  const attempts: Attempt[] = [];
 
   for (const model of chain) {
-    const g = guard(o.timeoutMs ?? 90_000, o.signal);
-    try {
-      const res = await fetch(ENDPOINT, {
-        method: "POST",
-        headers: headers(),
-        body: body(o, model, false),
-        signal: g.signal,
-      });
-      const raw = await res.text();
-      g.done();
+    for (const forceJson of [true, false]) {
+      const g = guard(o.timeoutMs ?? 90_000, o.signal);
+      const t0 = Date.now();
+      try {
+        const res = await fetch(ENDPOINT, {
+          method: "POST",
+          headers: h,
+          body: buildBody(o, model, false, forceJson),
+          signal: g.signal,
+        });
+        const raw = await res.text();
+        g.done();
 
-      if (!res.ok) {
-        lastError = new OpenRouterError(`${model} returned ${res.status}: ${raw.slice(0, 300)}`, res.status);
-        if (res.status === 401 || res.status === 403) throw lastError;
-        continue;
+        if (!res.ok) {
+          const { reason, fatal, hint } = classify(res.status, raw);
+          attempts.push({ model, ok: false, status: res.status, reason, ms: Date.now() - t0 });
+          if (fatal) throw new OpenRouterError(reason, res.status, attempts, true, hint);
+          if (forceJson && reason.includes("forced JSON")) continue;
+          break;
+        }
+
+        const text = JSON.parse(raw)?.choices?.[0]?.message?.content ?? "";
+        if (text.trim()) return { text, model };
+        attempts.push({ model, ok: false, reason: "returned an empty message", ms: Date.now() - t0 });
+        break;
+      } catch (err) {
+        g.done();
+        if (o.signal?.aborted) throw err;
+        if (err instanceof OpenRouterError && err.fatal) throw err;
+        attempts.push({
+          model, ok: false, ms: Date.now() - t0,
+          reason: err instanceof Error && err.message === "timeout" ? "timed out" : "could not be reached",
+        });
+        break;
       }
-
-      const text = JSON.parse(raw)?.choices?.[0]?.message?.content ?? "";
-      if (text.trim()) return { text, model };
-      lastError = new OpenRouterError(`${model} returned an empty message`);
-    } catch (err) {
-      g.done();
-      if (o.signal?.aborted) throw err;
-      if (err instanceof OpenRouterError && (err.status === 401 || err.status === 403)) throw err;
-      lastError = err;
     }
   }
 
   throw new OpenRouterError(
-    `All models failed. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+    `No free model could complete the request. Tried ${attempts.length}: ${summarise(attempts)}`,
+    undefined, attempts, false,
+    source === "seed" ? "The live model list could not be read; check outbound access to openrouter.ai." : undefined,
   );
 }

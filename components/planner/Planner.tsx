@@ -8,6 +8,7 @@ import { FORMATS } from "@/lib/formats";
 import PlanSheet from "./PlanSheet";
 import QualityPanel from "./QualityPanel";
 import PlanChat from "./PlanChat";
+import Diagnostics from "./Diagnostics";
 import { downloadDocx } from "@/lib/export/docx";
 import { SAMPLE_PLAN } from "@/lib/sample-plan";
 import { validate } from "@/lib/validator";
@@ -34,6 +35,8 @@ export default function Planner() {
   const [elapsed, setElapsed] = useState<number | undefined>();
   const [pass, setPass] = useState(1);
   const [error, setError] = useState("");
+  const [errorHint, setErrorHint] = useState<string | undefined>();
+  const [attempts, setAttempts] = useState<{ model: string; reason?: string; status?: number }[]>([]);
   const [refining, setRefining] = useState<string | null>(null);
   /** Snapshots taken before each chat edit, so every change is reversible. */
   const [undoStack, setUndoStack] = useState<{ plan: LessonPlan; quality: QualityReport | null }[]>([]);
@@ -74,7 +77,7 @@ export default function Planner() {
     const ctl = new AbortController();
     abortRef.current = ctl;
 
-    setBusy(true); setError(""); setPlan(null); setQuality(null);
+    setBusy(true); setError(""); setErrorHint(undefined); setAttempts([]); setPlan(null); setQuality(null);
     setStreamText(""); setElapsed(undefined); setPass(1);
     setUndoStack([]); setChanged([]);
     setStatus("Connecting to the model");
@@ -126,7 +129,11 @@ export default function Planner() {
               setElapsed(Number(ev.elapsedMs));
               setStatus("");
               break;
-            case "error": setError(String(ev.message)); break;
+            case "error":
+              setError(String(ev.message));
+              setErrorHint(ev.hint ? String(ev.hint) : undefined);
+              setAttempts(Array.isArray(ev.attempts) ? (ev.attempts as { model: string; reason?: string }[]) : []);
+              break;
           }
         }
       }
@@ -412,16 +419,7 @@ export default function Planner() {
 
         {/* ------------------------------ output ------------------------------ */}
         <section>
-          {error && (
-            <div className="no-print mb-4 rounded-xl border border-[#f3c7c0] bg-[#fdf3f1] p-4">
-              <div className="text-[13px] font-semibold text-[#a93226]">Could not finish the plan</div>
-              <p className="mt-1 text-[12.5px] leading-relaxed text-[#8f4a41]">{error}</p>
-              <p className="mt-2 text-[11.5px] text-[#a1685f]">
-                If this mentions a key or a model, run <code className="rounded bg-white/70 px-1">npm run doctor</code> to
-                see which free models your OpenRouter key can reach.
-              </p>
-            </div>
-          )}
+          {error && <Diagnostics message={error} hint={errorHint} attempts={attempts} />}
 
           {busy && !plan && (
             <div className="card p-6">
