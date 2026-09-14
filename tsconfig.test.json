@@ -18,6 +18,7 @@
     "lib/partial-json.ts",
     "lib/types.ts",
     "lib/patch.ts",
-    "lib/models.ts"
+    "lib/models.ts",
+    "lib/salvage.ts"
   ]
 }

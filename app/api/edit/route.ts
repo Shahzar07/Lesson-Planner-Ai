@@ -8,7 +8,7 @@ import { applyEdits, buildIndex, sectionOf, type Edit } from "@/lib/patch";
 import { FORMAT_BY_ID } from "@/lib/formats";
 
 export const runtime = "nodejs";
-export const maxDuration = 180;
+export const maxDuration = 60;
 export const dynamic = "force-dynamic";
 
 interface ChatTurn {

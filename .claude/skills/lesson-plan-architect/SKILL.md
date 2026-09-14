@@ -65,9 +65,12 @@ hallucinated field cannot reach a teacher's lesson plan.
 
 ## Working on the app itself
 
-- `npm test` runs the accuracy engine suite (no network needed) — 70 checks covering
-  every rubric rule, the tolerant JSON parser, the patch layer and model discovery.
-  Add a case here whenever you add or change a rubric check.
+- `npm test` runs the accuracy engine suite (no network needed) — 90 checks covering
+  every rubric rule, the tolerant JSON parser, the patch layer, model discovery and
+  truncation salvage. Add a case here whenever you add or change a rubric check.
+- Output size is the latency budget. Before adding a field to the schema in
+  `lib/skill/index.ts`, remember every ~40 tokens costs a teacher another second on a
+  free model. Fields only one format renders belong behind that format's branch.
 - `lib/sample-plan.ts` is a complete plan that must score 100. If a rubric change makes
   it score lower, fix the sample, not the check.
 - `npm run doctor` probes the local key; `GET /api/doctor` probes the **deployed**

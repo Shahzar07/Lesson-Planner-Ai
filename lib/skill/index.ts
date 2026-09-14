@@ -3,6 +3,12 @@ import path from "node:path";
 import type { LessonBrief } from "@/lib/types";
 import { CURRICULUM_BY_ID } from "@/lib/curricula";
 import { FORMAT_BY_ID } from "@/lib/formats";
+import {
+  section, COMPACT_CURRICULUM, VERB_RULES_EN, VERB_RULES_UR, URDU_FIELDS,
+} from "@/lib/skill/compact";
+
+/** Full knowledge packs cost ~5,300 tokens. Opt in when latency does not matter. */
+const FULL_CONTEXT = process.env.SABAQ_FULL_CONTEXT === "1";
 
 /* ------------------------------------------------------------------ *
  * The Skill loader.
@@ -51,88 +57,120 @@ export function selectPacks(brief: LessonBrief): string[] {
 export function schemaBlock(brief: LessonBrief): string {
   const fmt = FORMAT_BY_ID[brief.format];
   const is5E = brief.format === "cambridge-5e";
+  const stages = fmt?.stageTitles.length ?? 5;
+
+  // Fields only one format actually renders are not requested from the others.
+  // Every omitted key has a zod default, so a shorter answer is still valid —
+  // and ~1,500 fewer output tokens is ~40 seconds on a free model.
+  const only5E = is5E
+    ? `
+  "successCriteria": [string],        // 3, learner facing "I can ..."
+  "misconceptions": [ { "misconception": string, "howToAddress": string } ],  // 2
+  "keyVocabulary": [ { "term": string, "definition": string, "localExample": string } ], // 3
+  "priorKnowledge": [string],         // 2
+  "teacherReflection": [string],      // 2`
+    : "";
+
   return `{
-  "meta": {
-    "lessonNo": string, "date": string, "grade": string, "section": string,
-    "subject": string, "topic": string, "duration": ${brief.duration},
-    "classStrength": string, "averageAge": string, "bookName": string,
-    "pageNos": string, "teacherName": string, "coreSkill": string
-  },
+  "coreConcept": string,              // the single central idea, ONE sentence
   "curriculumAlignment": {
     "system": string, "stageLabel": string, "strand": string,
-    "outcomeStatement": string,          // the outcome in plain words
-    "code": null,                        // ONLY a real code if the brief gave one, else null
-    "commandWords": [string]             // exam command words this lesson rehearses
+    "outcomeStatement": string,       // the outcome in plain words, one sentence
+    "code": null,                     // ALWAYS null unless the brief gave a real code
+    "commandWords": [string]          // 2-3
   },
-  "coreConcept": string,                 // the single central idea, one sentence
-  "objectives": [                        // 3 to 5
-    { "text": string,                    // full ABCD sentence
-      "verb": string,                    // the measurable main verb only
+  "objectives": [                     // exactly 3
+    { "text": string,                 // full sentence: audience, verb, condition, degree
+      "verb": string,                 // the measurable main verb alone
       "bloomLevel": "Remember|Understand|Apply|Analyse|Evaluate|Create",
-      "condition": string,               // the "given/using/in pairs" part
-      "degree": string }                 // the success criterion, e.g. "4 out of 5"
-  ],
-  "successCriteria": [string],           // learner-facing "I can ..." ${is5E ? "(REQUIRED)" : "(one per objective)"}
-  "skillsAndAttitude": { "skills": [string], "attitudes": [string], "psychomotor": [string] },
-  "keyVocabulary": [ { "term": string, "definition": string, "localExample": string } ],
-  "priorKnowledge": [string],
-  "misconceptions": [ { "misconception": string, "howToAddress": string } ],
-  "resources": [ { "item": string, "purpose": string, "noTechAlternative": string } ],
-  "classroomManagement": { "rules": [string], "strategies": [string] },
+      "condition": string,            // the "using / given / in pairs" part
+      "degree": string }              // the success criterion, e.g. "4 of 5"
+  ],                                  // >=1 at Apply or above; <=1 at Remember
+  "skillsAndAttitude": { "skills": [string], "attitudes": [string], "psychomotor": [string] }, // 2/1/1
+  "resources": [ { "item": string, "purpose": string, "noTechAlternative": string } ], // 3
+  "classroomManagement": { "rules": [string], "strategies": [string] },  // 3 rules, 3 strategies
   "methodology": { "primaryMethod": string, "supportingMethods": [string], "rationale": string },
-  "contentDelivery": [string],           // the content split into teachable parts
-  "procedure": [                         // stage minutes MUST total exactly ${brief.duration}
-    { "title": string,                   // from the required stage titles
-      "stageType": string,
+  "contentDelivery": [string],        // 3, the content split into teachable parts
+  "procedure": [                      // ${stages} stages, minutes MUST total exactly ${brief.duration}
+    { "title": string,                // from the required titles below, in order
       "minutes": number,
-      "teacherDoes": string,             // script level: what the teacher says and does
-      "studentsDo": string,
-      "questions": [ { "q": string, "expected": string, "bloomLevel": string } ],
-      "checkpoint": string }             // how the teacher knows to move on
+      "teacherDoes": string,          // 2-3 sentences of what the teacher SAYS and DOES
+      "studentsDo": string,           // one sentence
+      "questions": [                  // exactly 2 per stage
+        { "q": string, "expected": string, "bloomLevel": string } ],
+      "checkpoint": string }          // one sentence: how to know whether to move on
   ],
   "boardSummary": { "heading": string, "lines": [string], "workedExample": string, "keyBox": [string] },
-  "differentiation": { "support": [string], "extension": [string], "specialNeeds": [string] },
-  "assessmentForLearning": [
+  "differentiation": {
+    "support": [string],              // exactly 2, each naming a concrete scaffold
+    "extension": [string],            // exactly 2, concrete
+    "specialNeeds": [string]          // 1
+  },
+  "assessmentForLearning": [          // exactly 2
     { "technique": string, "whenInLesson": string, "whatItReveals": string, "ifStudentsStruggle": string }
   ],
-  "recapitulation": { "technique": string, "questions": [string] },
-  "evaluation": { "items": [ { "question": string, "marks": number, "expectedAnswer": string, "bloomLevel": string } ], "totalMarks": number },
-  "homework": { "task": string, "estimatedMinutes": number, "howItWillBeChecked": string, "differentiatedOption": string },
-  "teacherReflection": [string]
+  "recapitulation": { "technique": string, "questions": [string] },   // 2 questions
+  "evaluation": {
+    "items": [ { "question": string, "marks": number, "expectedAnswer": string, "bloomLevel": string } ], // 3
+    "totalMarks": number
+  },
+  "homework": { "task": string, "estimatedMinutes": number, "howItWillBeChecked": string, "differentiatedOption": string }${only5E}
 }
 
-Required procedure stage titles for the "${fmt?.name}" format:
-${(fmt?.stageTitles ?? []).map((t) => `  - ${t}`).join("\n")}`;
+Stage titles to use, in this order:
+${(fmt?.stageTitles ?? []).map((t) => `  - ${t}`).join("\n")}
+
+Keep every string tight. A field that runs long costs the teacher time waiting.`;
 }
 
 /* ------------------------------ prompts ------------------------------ */
 
 export function buildSystemPrompt(brief: LessonBrief): string {
-  const packs = selectPacks(brief);
   const fmt = FORMAT_BY_ID[brief.format];
-  const parts: string[] = [loadSkill()];
+  const skill = loadSkill();
+  const parts: string[] = [];
 
-  for (const p of packs) {
-    const body = loadPack(p);
-    if (body) parts.push(`\n\n---\n\n${body}`);
+  if (FULL_CONTEXT) {
+    parts.push(skill);
+    for (const p of selectPacks(brief)) {
+      const body = loadPack(p);
+      if (body) parts.push(`\n\n---\n\n${body}`);
+    }
+  } else {
+    // The rules that change the output, and nothing else.
+    parts.push(
+      "# SKILL — Lesson Plan Architect\n\n" +
+        "You are Sabaq, a senior teacher-educator who has supervised B.Ed and ADE teaching " +
+        "practice in Pakistan for twenty years. You write lesson plans a university supervisor " +
+        "signs without a correction. Your output is a working document a teacher carries into a " +
+        "real classroom tomorrow morning, not an essay about teaching.\n\n" +
+        (section(skill, "## 1. Non-negotiables") || "") +
+        "\n\n" +
+        (section(skill, "## 6. Self-check") || ""),
+    );
+    parts.push(`\n\n---\n\n# CURRICULUM\n\n${COMPACT_CURRICULUM[brief.curriculum] ?? ""}`);
+    parts.push(`\n\n---\n\n${brief.language === "ur" ? VERB_RULES_UR : VERB_RULES_EN}`);
+    if (brief.language === "ur") parts.push(`\n\n${URDU_FIELDS}`);
   }
 
-  parts.push(`\n\n---\n\n# FORMAT DIRECTIVE — ${fmt?.name ?? brief.format}\n\n${fmt?.directive ?? ""}`);
+  parts.push(`\n\n---\n\n# FORMAT — ${fmt?.name ?? brief.format}\n\n${fmt?.directive ?? ""}`);
 
   if (brief.lowResource) {
-    parts.push(`\n\n# LOW-RESOURCE MODE (ON)
-This classroom has a blackboard and chalk and nothing else. No projector, no printer,
-no internet, no photocopies, no laminated cards. Every resource must be either
-(a) already in the room, (b) free and locally findable, or (c) drawable on the board in
-under two minutes. If you name anything printed, the noTechAlternative must say exactly
-how to run the activity without it.`);
+    parts.push(`\n\n# LOW-RESOURCE MODE
+A blackboard and chalk, nothing else. No projector, printer, internet or photocopies.
+Every resource must already be in the room, be free and locally findable, or be drawable
+on the board in two minutes. Anything printed needs a no-tech alternative in the same line.`);
   }
 
   if (!brief.includeHomework) {
     parts.push(`\n\n# HOMEWORK
-The teacher does not want homework set. Put a single short line in homework.task saying
-no written homework is assigned and give a two-minute oral revision instruction instead.`);
+None is wanted. Put one short line in homework.task saying no written homework is set,
+and give a two-minute oral revision instruction instead.`);
   }
+
+  parts.push(`\n\n# SPEED
+Answer in one pass. Do not restate the brief, do not explain your reasoning, do not write
+anything before or after the JSON. Keep every field tight and concrete.`);
 
   return parts.join("");
 }

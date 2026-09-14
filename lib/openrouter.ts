@@ -10,8 +10,14 @@ export interface ChatOptions {
   maxTokens?: number;
   temperature?: number;
   signal?: AbortSignal;
-  /** ms before a model is abandoned and the next in the chain is tried */
+  /** ms to wait for the FIRST token before giving up on a model */
+  ttftMs?: number;
+  /** ms a single model may take in total */
   timeoutMs?: number;
+  /** absolute epoch ms the whole request must finish by, across all models */
+  deadline?: number;
+  /** how many models to try before giving up */
+  maxModels?: number;
 }
 
 export interface Attempt {
@@ -102,7 +108,7 @@ function buildBody(o: ChatOptions, model: string, stream: boolean, forceJson: bo
     model,
     stream,
     temperature: o.temperature ?? 0.4,
-    max_tokens: o.maxTokens ?? 8000,
+    max_tokens: o.maxTokens ?? 5000,
     // Dropped on the retry: several free models 400 on this, and the tolerant
     // parser in lib/partial-json.ts copes without it.
     ...(forceJson ? { response_format: { type: "json_object" } } : {}),
@@ -113,9 +119,20 @@ function buildBody(o: ChatOptions, model: string, stream: boolean, forceJson: bo
   });
 }
 
-function guard(timeoutMs: number, external?: AbortSignal) {
+/**
+ * Two clocks, because they catch different failures.
+ *
+ * A model that is cold or queued sends nothing at all — that is the common
+ * free-tier failure, and waiting 90s for it burns the whole request budget.
+ * So the first-token clock is short and aggressive. Once tokens are flowing
+ * the model is alive and earns the longer overall clock.
+ */
+function guard(ttftMs: number, totalMs: number, external?: AbortSignal) {
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(new Error("timeout")), timeoutMs);
+  let ttft: ReturnType<typeof setTimeout> | null = setTimeout(
+    () => ctl.abort(new Error("ttft")), ttftMs,
+  );
+  const total = setTimeout(() => ctl.abort(new Error("timeout")), totalMs);
   const onAbort = () => ctl.abort(external?.reason);
   if (external) {
     if (external.aborted) onAbort();
@@ -123,10 +140,28 @@ function guard(timeoutMs: number, external?: AbortSignal) {
   }
   return {
     signal: ctl.signal,
+    /** call on the first delta: the model is alive, stop the short clock */
+    alive: () => { if (ttft) { clearTimeout(ttft); ttft = null; } },
     done: () => {
-      clearTimeout(timer);
+      if (ttft) clearTimeout(ttft);
+      clearTimeout(total);
       external?.removeEventListener("abort", onAbort);
     },
+  };
+}
+
+/** Per-model slice of the remaining budget, so one slow model cannot eat it all. */
+function budget(o: ChatOptions, modelsLeft: number) {
+  const now = Date.now();
+  const remaining = o.deadline ? Math.max(0, o.deadline - now) : Number.POSITIVE_INFINITY;
+  const cap = o.timeoutMs ?? 45_000;
+  const share = remaining === Number.POSITIVE_INFINITY
+    ? cap
+    : Math.max(6_000, Math.min(cap, Math.floor(remaining / Math.max(1, Math.min(modelsLeft, 2)))));
+  return {
+    totalMs: share,
+    ttftMs: Math.max(4_000, Math.min(o.ttftMs ?? 14_000, share)),
+    expired: remaining <= 1_500,
   };
 }
 
@@ -149,12 +184,21 @@ export async function* streamChat(
   yield { type: "chain", chain, source, note };
 
   const attempts: Attempt[] = [];
+  const shortlist = chain.slice(0, o.maxModels ?? 4);
 
-  for (const model of chain) {
+  for (let i = 0; i < shortlist.length; i++) {
+    const model = shortlist[i];
+    const b = budget(o, shortlist.length - i);
+    if (b.expired) {
+      attempts.push({ model, ok: false, reason: "ran out of time before trying", ms: 0 });
+      break;
+    }
+
     // Try with forced JSON, then once more without it if that is what broke.
     for (const forceJson of [true, false]) {
-      const g = guard(o.timeoutMs ?? 90_000, o.signal);
+      const g = guard(b.ttftMs, b.totalMs, o.signal);
       const t0 = Date.now();
+      let emitted = 0;
       try {
         const res = await fetch(ENDPOINT, {
           method: "POST",
@@ -167,11 +211,13 @@ export async function* streamChat(
           const raw = await res.text().catch(() => "");
           const { reason, fatal, hint } = classify(res.status, raw);
           g.done();
-          const retryable = !forceJson || !reason.includes("forced JSON");
-          if (retryable) attempts.push({ model, ok: false, status: res.status, reason, ms: Date.now() - t0 });
+          const jsonIssue = reason.includes("forced JSON");
+          if (!jsonIssue || !forceJson) {
+            attempts.push({ model, ok: false, status: res.status, reason, ms: Date.now() - t0 });
+          }
           if (fatal) throw new OpenRouterError(reason, res.status, attempts, true, hint);
-          if (forceJson && reason.includes("forced JSON")) continue; // retry without it
-          break; // next model
+          if (forceJson && jsonIssue) continue;
+          break;
         }
 
         yield { type: "model", model };
@@ -179,7 +225,6 @@ export async function* streamChat(
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
-        let emitted = 0;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -196,6 +241,7 @@ export async function* streamChat(
               const json = JSON.parse(payload);
               const delta: string | undefined = json?.choices?.[0]?.delta?.content;
               if (delta) {
+                if (emitted === 0) g.alive();
                 emitted += delta.length;
                 yield { type: "delta", text: delta };
               }
@@ -213,10 +259,18 @@ export async function* streamChat(
         g.done();
         if (o.signal?.aborted) throw err;
         if (err instanceof OpenRouterError && err.fatal) throw err;
-        attempts.push({
-          model, ok: false, ms: Date.now() - t0,
-          reason: err instanceof Error && err.message === "timeout" ? "timed out" : "could not be reached",
-        });
+
+        // Tokens already reached the caller. A cut stream is worth salvaging —
+        // a mostly-written plan beats an error message, and the route repairs
+        // the truncated JSON.
+        if (emitted > 0) return;
+
+        const why = err instanceof Error && err.message === "ttft"
+          ? `sent nothing within ${Math.round(b.ttftMs / 1000)}s`
+          : err instanceof Error && err.message === "timeout"
+            ? "timed out"
+            : "could not be reached";
+        attempts.push({ model, ok: false, ms: Date.now() - t0, reason: why });
         break;
       }
     }
@@ -238,10 +292,14 @@ export async function chat(o: ChatOptions): Promise<{ text: string; model: strin
   const h = headers();
   const { chain, source } = await resolveChain(o.language, o.preferredModel, o.signal);
   const attempts: Attempt[] = [];
+  const shortlist = chain.slice(0, o.maxModels ?? 3);
 
-  for (const model of chain) {
+  for (let i = 0; i < shortlist.length; i++) {
+    const model = shortlist[i];
+    const b = budget(o, shortlist.length - i);
+    if (b.expired) break;
     for (const forceJson of [true, false]) {
-      const g = guard(o.timeoutMs ?? 90_000, o.signal);
+      const g = guard(b.ttftMs, b.totalMs, o.signal);
       const t0 = Date.now();
       try {
         const res = await fetch(ENDPOINT, {
@@ -271,7 +329,9 @@ export async function chat(o: ChatOptions): Promise<{ text: string; model: strin
         if (err instanceof OpenRouterError && err.fatal) throw err;
         attempts.push({
           model, ok: false, ms: Date.now() - t0,
-          reason: err instanceof Error && err.message === "timeout" ? "timed out" : "could not be reached",
+          reason: err instanceof Error && err.message === "ttft"
+            ? `sent nothing within ${Math.round(b.ttftMs / 1000)}s`
+            : err instanceof Error && err.message === "timeout" ? "timed out" : "could not be reached",
         });
         break;
       }

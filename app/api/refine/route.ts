@@ -6,7 +6,7 @@ import { parseLoose } from "@/lib/partial-json";
 import { validate, autoBalance } from "@/lib/validator";
 
 export const runtime = "nodejs";
-export const maxDuration = 180;
+export const maxDuration = 60;
 export const dynamic = "force-dynamic";
 
 /** Rewrite one section of an existing plan without disturbing the rest. */

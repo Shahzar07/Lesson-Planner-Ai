@@ -2,6 +2,7 @@ import { validate, autoBalance } from "../.test-build/validator.js";
 import { parseLoose, repairPartial, extract } from "../.test-build/partial-json.js";
 import { applyEdits, getAt, parsePointer, buildIndex, sectionOf } from "../.test-build/patch.js";
 import { rankModels, fetchFreeModels, resolveChain, SEED } from "../.test-build/models.js";
+import { salvagePlan } from "../.test-build/salvage.js";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = "") => {
@@ -360,6 +361,143 @@ const fresh = async (payload, opts) => {
 }
 
 ok("the seed is only a fallback, and is non-empty", Array.isArray(SEED) && SEED.length >= 5);
+
+
+console.log("\n\x1b[1mSalvaging a cut-off stream\x1b[0m");
+
+ok("passes a complete plan through untouched", (() => {
+  const r = salvagePlan(structuredClone(GOOD));
+  return r.plan !== null && r.truncated === false && r.dropped.length === 0;
+})());
+
+ok("drops a half-written trailing stage and keeps the rest", (() => {
+  const p = structuredClone(GOOD);
+  p.procedure.push({ title: "Evaluation", minutes: 4 });   // no teacherDoes: cut mid-object
+  const r = salvagePlan(p);
+  return r.plan !== null && r.truncated && r.plan.procedure.length === GOOD.procedure.length;
+})());
+
+ok("drops a half-written objective", (() => {
+  const p = structuredClone(GOOD);
+  p.objectives.push({ text: "", verb: "", bloomLevel: "Apply" });
+  const r = salvagePlan(p);
+  return r.plan !== null && r.plan.objectives.length === GOOD.objectives.length;
+})());
+
+ok("drops several broken entries in one go", (() => {
+  const p = structuredClone(GOOD);
+  p.procedure.push({ title: "X", minutes: 1 });
+  p.evaluation.items.push({ question: "", marks: 1 });
+  p.resources.push({ purpose: "no item" });
+  const r = salvagePlan(p);
+  return r.plan !== null && r.dropped.length >= 3;
+})());
+
+ok("keeps the earlier items when the last one is broken", (() => {
+  const p = structuredClone(GOOD);
+  const firstTitle = p.procedure[0].title;
+  p.procedure.push({ minutes: 2 });
+  const r = salvagePlan(p);
+  return r.plan?.procedure[0].title === firstTitle;
+})());
+
+ok("fills defaults for fields the model never reached", (() => {
+  const p = structuredClone(GOOD);
+  delete p.teacherReflection;
+  delete p.keyVocabulary;
+  delete p.successCriteria;
+  const r = salvagePlan(p);
+  return r.plan !== null &&
+         Array.isArray(r.plan.teacherReflection) &&
+         Array.isArray(r.plan.keyVocabulary);
+})());
+
+ok("refuses when there is not enough to be a plan", (() => {
+  const r = salvagePlan({ coreConcept: "only this" });
+  return r.plan === null;
+})());
+
+ok("refuses junk", salvagePlan("not an object").plan === null && salvagePlan(null).plan === null);
+
+ok("never mutates its input", (() => {
+  const p = structuredClone(GOOD);
+  p.procedure.push({ title: "X", minutes: 1 });
+  const n = p.procedure.length;
+  salvagePlan(p);
+  return p.procedure.length === n;
+})());
+
+ok("a salvaged plan still passes the rubric machinery", (() => {
+  const p = structuredClone(GOOD);
+  p.procedure.push({ title: "Cut off here", minutes: 3 });
+  const r = salvagePlan(p);
+  if (!r.plan) return false;
+  const report = validate(r.plan, brief);
+  return typeof report.score === "number" && report.checks.length === 11;
+})());
+
+// end-to-end: truncated JSON text -> parse -> salvage -> valid plan
+ok("recovers a plan from a truncated JSON STRING", (() => {
+  const full = JSON.stringify(GOOD);
+  const cut = full.slice(0, Math.floor(full.length * 0.88));   // stream died at 88%
+  const parsed = parseLoose(cut);
+  if (!parsed) return false;
+  const r = salvagePlan(parsed);
+  return r.plan !== null && r.plan.objectives.length >= 1 && r.plan.procedure.length >= 1;
+})());
+
+
+console.log("\n\x1b[1mTruncation stress test\x1b[0m");
+{
+  // A stream can die anywhere. Sweep every cut point and measure how often a
+  // usable plan comes back, because this is what a serverless timeout does.
+  const full = JSON.stringify(GOOD);
+  let recovered = 0, attempts = 0, worstLoss = 0;
+  const failures = [];
+  for (let pct = 40; pct <= 99; pct++) {
+    attempts++;
+    const cut = full.slice(0, Math.floor(full.length * pct / 100));
+    const parsed = parseLoose(cut);
+    const r = parsed ? salvagePlan(parsed) : { plan: null };
+    if (r.plan && r.plan.objectives.length >= 1 && r.plan.procedure.length >= 1) {
+      recovered++;
+      const kept = r.plan.procedure.length;
+      worstLoss = Math.max(worstLoss, GOOD.procedure.length - kept);
+    } else {
+      failures.push(pct);
+    }
+  }
+  const rate = Math.round((recovered / attempts) * 100);
+  ok(`recovers a usable plan from ${rate}% of cut points between 40% and 99%`,
+     rate >= 95, `failed at: ${failures.join(", ")}`);
+  ok("a recovered plan always keeps at least one stage", worstLoss < GOOD.procedure.length);
+
+  // and the recovered plan must still be scoreable, never crash the rubric
+  let scored = 0;
+  for (let pct = 60; pct <= 99; pct += 3) {
+    const parsed = parseLoose(full.slice(0, Math.floor(full.length * pct / 100)));
+    const r = parsed ? salvagePlan(parsed) : { plan: null };
+    if (r.plan) { const rep = validate(r.plan, brief); if (typeof rep.score === "number") scored++; }
+  }
+  ok("every recovered plan can be scored without throwing", scored >= 12, `scored ${scored}`);
+}
+
+console.log("\n\x1b[1mMid-escape and awkward cuts\x1b[0m");
+ok("survives a cut on a lone backslash", parseLoose('{"a":"line\\\\') !== null);
+ok("survives a cut right after a key", parseLoose('{"a":1,"b":') !== null);
+ok("survives a cut inside a number", (() => {
+  const r = parseLoose('{"a":1,"b":12');
+  return r !== null && r.a === 1;
+})());
+ok("survives a cut inside a unicode escape", parseLoose('{"a":"x\\u00') !== null);
+ok("survives a cut deep in nested arrays", (() => {
+  const r = parseLoose('{"a":[{"b":[1,2,{"c":"half');
+  return r !== null && Array.isArray(r.a);
+})());
+ok("keeps as much as possible when retreating", (() => {
+  const r = parseLoose('{"keep1":"yes","keep2":"also","broken":"cut here');
+  return r !== null && r.keep1 === "yes" && r.keep2 === "also";
+})());
 
 console.log(`\n\x1b[1m${pass} passed, ${fail} failed\x1b[0m\n`);
 process.exit(fail ? 1 : 0);

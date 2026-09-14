@@ -83,14 +83,14 @@ export const LessonPlanSchema = z.object({
     section: z.string().default(""),
     subject: z.string().default(""),
     topic: z.string().default(""),
-    duration: z.coerce.number().int().min(5).max(240),
+    duration: z.coerce.number().int().min(5).max(240).default(40),
     classStrength: z.string().default(""),
     averageAge: z.string().default(""),
     bookName: z.string().default(""),
     pageNos: z.string().default(""),
     teacherName: z.string().default(""),
     coreSkill: z.string().default(""),
-  }),
+  }).default({}),
 
   curriculumAlignment: z.object({
     system: z.string().default(""),
@@ -100,7 +100,7 @@ export const LessonPlanSchema = z.object({
     /** null unless the teacher supplied a real code. Never invented. */
     code: z.string().nullable().default(null),
     commandWords: z.array(z.string()).default([]),
-  }),
+  }).default({}),
 
   coreConcept: z.string().default(""),
   objectives: z.array(ObjectiveSchema).min(1),
@@ -110,7 +110,7 @@ export const LessonPlanSchema = z.object({
     skills: z.array(z.string()).default([]),
     attitudes: z.array(z.string()).default([]),
     psychomotor: z.array(z.string()).default([]),
-  }),
+  }).default({}),
 
   keyVocabulary: z.array(VocabSchema).default([]),
   priorKnowledge: z.array(z.string()).default([]),
@@ -120,13 +120,13 @@ export const LessonPlanSchema = z.object({
   classroomManagement: z.object({
     rules: z.array(z.string()).default([]),
     strategies: z.array(z.string()).default([]),
-  }),
+  }).default({}),
 
   methodology: z.object({
     primaryMethod: z.string().default(""),
     supportingMethods: z.array(z.string()).default([]),
     rationale: z.string().default(""),
-  }),
+  }).default({}),
 
   /** ترسیلِ مواد — the content broken into teachable parts. */
   contentDelivery: z.array(z.string()).default([]),
@@ -138,32 +138,32 @@ export const LessonPlanSchema = z.object({
     lines: z.array(z.string()).default([]),
     workedExample: z.string().default(""),
     keyBox: z.array(z.string()).default([]),
-  }),
+  }).default({}),
 
   differentiation: z.object({
     support: z.array(z.string()).default([]),
     extension: z.array(z.string()).default([]),
     specialNeeds: z.array(z.string()).default([]),
-  }),
+  }).default({}),
 
   assessmentForLearning: z.array(AflSchema).default([]),
 
   recapitulation: z.object({
     technique: z.string().default(""),
     questions: z.array(z.string()).default([]),
-  }),
+  }).default({}),
 
   evaluation: z.object({
     items: z.array(EvalItemSchema).default([]),
     totalMarks: z.coerce.number().default(0),
-  }),
+  }).default({}),
 
   homework: z.object({
     task: z.string().default(""),
     estimatedMinutes: z.coerce.number().default(0),
     howItWillBeChecked: z.string().default(""),
     differentiatedOption: z.string().default(""),
-  }),
+  }).default({}),
 
   teacherReflection: z.array(z.string()).default([]),
 });

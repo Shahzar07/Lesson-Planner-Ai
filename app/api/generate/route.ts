@@ -4,14 +4,21 @@ import { buildSystemPrompt, buildUserPrompt, buildRepairPrompt } from "@/lib/ski
 import { streamChat, chat, OpenRouterError } from "@/lib/openrouter";
 import { parseLoose } from "@/lib/partial-json";
 import { validate, autoBalance } from "@/lib/validator";
+import { salvagePlan } from "@/lib/salvage";
 import { FORMAT_BY_ID } from "@/lib/formats";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+// Vercel Hobby caps a function at 60s and kills it mid-stream at the limit, so
+// the whole request is budgeted to finish inside that. Raise both if you are on
+// a plan that allows longer.
+export const maxDuration = 60;
+const WALL_CLOCK_MS = Number(process.env.SABAQ_BUDGET_MS ?? 52_000);
 export const dynamic = "force-dynamic";
 
 /** Score below which the repair pass is worth a second model call. */
 const REPAIR_THRESHOLD = 90;
+/** A repair is a second full generation; it only runs with time to spare. */
+const REPAIR_NEEDS_MS = 18_000;
 
 function normalise(input: Partial<LessonBrief>): LessonBrief {
   const fmt = FORMAT_BY_ID[input.format ?? ""] ?? FORMAT_BY_ID["bed-english"];
@@ -36,7 +43,7 @@ function normalise(input: Partial<LessonBrief>): LessonBrief {
     notes: (input.notes || "").slice(0, 1600),
     lowResource: Boolean(input.lowResource),
     includeHomework: input.includeHomework !== false,
-    strictRepair: input.strictRepair !== false,
+    strictRepair: Boolean(input.strictRepair),
   };
 }
 
@@ -93,13 +100,19 @@ export async function POST(req: NextRequest) {
         let raw = "";
         let usedModel = "";
 
+        const deadline = started + WALL_CLOCK_MS;
+
         for await (const ev of streamChat({
           system,
           user,
           language: brief.language,
           signal: req.signal,
-          maxTokens: 9000,
-          temperature: 0.4,
+          maxTokens: 5000,
+          temperature: 0.35,
+          deadline,
+          ttftMs: 14_000,
+          timeoutMs: 45_000,
+          maxModels: 4,
         })) {
           if (ev.type === "chain") {
             send({
@@ -129,22 +142,36 @@ export async function POST(req: NextRequest) {
           return;
         }
 
-        const first = LessonPlanSchema.safeParse(parsed);
-        if (!first.success) {
+        const salvaged = salvagePlan(parsed);
+        if (!salvaged.plan) {
           send({
             type: "error",
-            message: "The plan came back incomplete: " + first.error.issues.slice(0, 3).map((i) => i.path.join(".")).join(", "),
+            message:
+              "The model was cut off before it produced enough of a plan to use. Try again — it is usually faster on the second attempt.",
+            hint: "If this keeps happening, your hosting plan's function time limit may be shorter than the model needs. Lower SABAQ_BUDGET_MS, or upgrade the plan.",
           });
           controller.close();
           return;
         }
+        if (salvaged.truncated) {
+          send({
+            type: "status",
+            message: `The model was cut short, so ${salvaged.dropped.length} incomplete item${salvaged.dropped.length === 1 ? "" : "s"} were dropped`,
+          });
+        }
 
-        let plan = stampMeta(autoBalance(first.data), brief);
+        let plan = stampMeta(autoBalance(salvaged.plan), brief);
         let report = validate(plan, brief);
         send({ type: "plan", plan, quality: report, model: usedModel, pass: 1 });
 
         /* ---- repair pass: only the failures, only when it is worth it ---- */
-        if (brief.strictRepair && report.score < REPAIR_THRESHOLD && report.failures.length) {
+        const msLeft = deadline - Date.now();
+        if (
+          brief.strictRepair &&
+          report.score < REPAIR_THRESHOLD &&
+          report.failures.length &&
+          msLeft > REPAIR_NEEDS_MS
+        ) {
           send({
             type: "status",
             message: `Scored ${report.score}. Repairing ${report.failures.length} issue${report.failures.length === 1 ? "" : "s"}`,
@@ -156,8 +183,12 @@ export async function POST(req: NextRequest) {
               user: buildRepairPrompt(brief, JSON.stringify(plan), report.failures),
               language: brief.language,
               signal: req.signal,
-              maxTokens: 9000,
+              maxTokens: 5000,
               temperature: 0.2,
+              deadline,
+              ttftMs: 10_000,
+              timeoutMs: Math.max(8_000, msLeft - 2_000),
+              maxModels: 2,
             });
 
             const repaired = LessonPlanSchema.safeParse(parseLoose(text));
@@ -181,6 +212,7 @@ export async function POST(req: NextRequest) {
           quality: report,
           model: usedModel,
           elapsedMs: Date.now() - started,
+          truncated: salvaged.truncated,
         });
       } catch (err) {
         if (err instanceof OpenRouterError) {

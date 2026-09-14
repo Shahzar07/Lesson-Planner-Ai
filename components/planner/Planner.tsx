@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { LessonPlan, LessonBrief, QualityReport } from "@/lib/types";
 import { CURRICULA, CURRICULUM_BY_ID, DURATIONS, CORE_SKILLS_EN, CORE_SKILLS_UR } from "@/lib/curricula";
@@ -9,6 +9,7 @@ import PlanSheet from "./PlanSheet";
 import QualityPanel from "./QualityPanel";
 import PlanChat from "./PlanChat";
 import Diagnostics from "./Diagnostics";
+import LivePreview from "./LivePreview";
 import { downloadDocx } from "@/lib/export/docx";
 import { SAMPLE_PLAN } from "@/lib/sample-plan";
 import { validate } from "@/lib/validator";
@@ -21,7 +22,7 @@ const INITIAL: LessonBrief = {
   bookName: "", pageNos: "", teacherName: "", section: "", date: today(),
   lessonNo: "", coreSkill: "", language: "en", format: "bed-english",
   priorKnowledge: "", notes: "", lowResource: false,
-  includeHomework: true, strictRepair: true,
+  includeHomework: true, strictRepair: false,
 };
 
 export default function Planner() {
@@ -33,6 +34,7 @@ export default function Planner() {
   const [quality, setQuality] = useState<QualityReport | null>(null);
   const [model, setModel] = useState("");
   const [elapsed, setElapsed] = useState<number | undefined>();
+  const [startedAt, setStartedAt] = useState(0);
   const [pass, setPass] = useState(1);
   const [error, setError] = useState("");
   const [errorHint, setErrorHint] = useState<string | undefined>();
@@ -80,6 +82,7 @@ export default function Planner() {
     setBusy(true); setError(""); setErrorHint(undefined); setAttempts([]); setPlan(null); setQuality(null);
     setStreamText(""); setElapsed(undefined); setPass(1);
     setUndoStack([]); setChanged([]);
+    setStartedAt(Date.now());
     setStatus("Connecting to the model");
 
     try {
@@ -115,7 +118,7 @@ export default function Planner() {
             case "status": setStatus(String(ev.message)); break;
             case "model":
               setModel(String(ev.model));
-              setStatus(`Writing the plan with ${String(ev.model).split("/").pop()?.replace(":free", "")}`);
+              setStatus("Writing the plan");
               break;
             case "delta": setStreamText((s) => s + String(ev.text)); break;
             case "plan":
@@ -216,13 +219,6 @@ export default function Planner() {
     const t = setTimeout(() => setChanged([]), 2600);
     return () => clearTimeout(t);
   }, [changed]);
-
-  const streamPreview = useMemo(() => {
-    if (!streamText) return "";
-    // Show the human-readable values arriving, not raw JSON punctuation.
-    const words = streamText.replace(/[{}\[\]"]/g, " ").replace(/\s+/g, " ").trim();
-    return words.slice(-600);
-  }, [streamText]);
 
   return (
     <div className="min-h-screen bg-wash/40">
@@ -390,7 +386,7 @@ export default function Planner() {
                   {([
                     ["lowResource", "Low-resource mode", "Blackboard and chalk only. No printing, no power."],
                     ["includeHomework", "Set homework", "Include a homework task."],
-                    ["strictRepair", "Auto-repair failures", "Run a second pass on anything the rubric fails."],
+                    ["strictRepair", "Auto-repair failures", "A second pass on whatever the rubric fails. Roughly doubles the wait."],
                   ] as const).map(([k, title, sub]) => (
                     <label key={k} className="flex cursor-pointer items-start gap-2.5 rounded-lg p-1.5 hover:bg-wash/60">
                       <input
@@ -422,22 +418,13 @@ export default function Planner() {
           {error && <Diagnostics message={error} hint={errorHint} attempts={attempts} />}
 
           {busy && !plan && (
-            <div className="card p-6">
-              <div className="flex items-center gap-2.5">
-                <span className="live-dot h-2 w-2 rounded-full bg-grass" />
-                <span className="display-sm text-[14px]">{status || "Working"}</span>
-              </div>
-              <div className="mt-4 space-y-2">
-                {[92, 78, 85, 60].map((w, i) => (
-                  <div key={i} className="shimmer h-3 rounded-full bg-wash" style={{ width: `${w}%` }} />
-                ))}
-              </div>
-              {streamPreview && (
-                <p className="mt-5 max-h-28 overflow-hidden text-[11.5px] leading-relaxed text-faint">
-                  {streamPreview}
-                </p>
-              )}
-            </div>
+            <LivePreview
+              raw={streamText}
+              status={status}
+              model={model}
+              startedAt={startedAt}
+              urdu={brief.language === "ur"}
+            />
           )}
 
           {!busy && !plan && !error && (

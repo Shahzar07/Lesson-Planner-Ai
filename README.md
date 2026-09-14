@@ -186,6 +186,51 @@ SABAQ_MODELS_EN=z-ai/glm-4.6:free,qwen/qwen3-max:free
 SABAQ_MODELS_UR=qwen/qwen3-max:free,z-ai/glm-4.6:free
 ```
 
+### Speed
+
+A free model writes roughly 25-60 tokens a second, so the only lever that
+matters is how much it is asked to write. Two numbers decided the design:
+
+| | before | now |
+|---|---|---|
+| System prompt | ~5,300 tokens | **~1,600** |
+| Output required for one plan | ~3,885 tokens | **~1,800** |
+| Repair pass | on by default (doubled the wait) | opt-in |
+| Typical wall clock | 90-180s, usually killed by the host | **~30-45s** |
+
+Four changes got there:
+
+- **Compact context by default.** The knowledge packs are the source of truth for
+  humans, but the request only carries the rules that change the output: the
+  non-negotiables, the verb tables, and four to six lines about the curriculum in hand.
+  Set `SABAQ_FULL_CONTEXT=1` to send everything when latency does not matter.
+- **A format-aware schema.** A B.Ed plan is no longer asked for the fields only the
+  Cambridge 5E view renders. Every omitted key has a zod default, so a shorter answer
+  is still a valid one.
+- **Two clocks per model.** A cold or queued free model sends *nothing*, and waiting 90
+  seconds for it used to burn the entire budget. The first-token clock is short and
+  aggressive (14s); once tokens are flowing the model has proved it is alive and earns
+  the longer one. The whole request is bounded by a single deadline, sliced across at
+  most four models.
+- **The repair pass is opt-in**, because it is a second full generation.
+
+### When the stream is cut
+
+Serverless functions have a wall clock — **Vercel Hobby kills a function at 60 seconds**,
+mid-stream, without ceremony. `maxDuration` is set to 60 and the internal budget to 52s
+so the request finishes first, but a slow provider can still be truncated.
+
+Rather than throw that away, `lib/salvage.ts` keeps it. The tolerant parser closes the
+JSON wherever it stopped — retreating past a cut mid-escape or mid-number to the last
+clean boundary — and salvage prunes the individual half-written entries until the plan
+validates. A plan missing its last evaluation item is still a plan; an error message is
+not. The test suite sweeps **every cut point from 40% to 99% and recovers a usable plan
+from 100% of them.**
+
+The teacher also sees this happening: the planner parses the partial JSON as it arrives
+and fills the objectives, stages and timings in live, so the wait reads as progress
+rather than a frozen screen.
+
 ### When it breaks
 
 Two diagnoses, because they answer different questions:
