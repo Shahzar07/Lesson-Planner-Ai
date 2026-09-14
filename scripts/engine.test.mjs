@@ -1,5 +1,6 @@
 import { validate, autoBalance } from "../.test-build/validator.js";
 import { parseLoose, repairPartial, extract } from "../.test-build/partial-json.js";
+import { applyEdits, getAt, parsePointer, buildIndex, sectionOf } from "../.test-build/patch.js";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = "") => {
@@ -121,6 +122,114 @@ ok("handles braces inside strings", parseLoose('{"a":"a } brace","b":7}')?.b ===
 ok("handles escaped quotes", parseLoose('{"a":"say \\"hi\\"","b":8}')?.b === 8);
 ok("returns null on junk", parseLoose("not json at all") === null);
 ok("handles Urdu content", parseLoose('{"t":"سبقی خاکہ"}')?.t === "سبقی خاکہ");
+
+
+console.log("\n\x1b[1mTargeted edits (JSON Pointer)\x1b[0m");
+
+const base = () => structuredClone(GOOD);
+
+ok("replaces a nested string", (() => {
+  const r = applyEdits(base(), [{ path: "/coreConcept", value: "New idea." }]);
+  return r.doc.coreConcept === "New idea." && r.applied.length === 1 && !r.rejected.length;
+})());
+
+ok("records the before value for the diff", (() => {
+  const r = applyEdits(base(), [{ path: "/coreConcept", value: "x" }]);
+  return r.applied[0].before === GOOD.coreConcept && r.applied[0].after === "x";
+})());
+
+ok("edits an item inside an array", (() => {
+  const r = applyEdits(base(), [{ path: "/objectives/1/bloomLevel", value: "Create" }]);
+  return r.doc.objectives[1].bloomLevel === "Create" && r.doc.objectives[0].bloomLevel === "Apply";
+})());
+
+ok("appends with a trailing dash", (() => {
+  const n = GOOD.differentiation.extension.length;
+  const r = applyEdits(base(), [{ op: "add", path: "/differentiation/extension/-", value: "Another task." }]);
+  return r.doc.differentiation.extension.length === n + 1 &&
+         r.doc.differentiation.extension.at(-1) === "Another task.";
+})());
+
+ok("inserts at a position", (() => {
+  const r = applyEdits(base(), [{ op: "add", path: "/priorKnowledge/0", value: "First." }]);
+  return r.doc.priorKnowledge[0] === "First." && r.doc.priorKnowledge.length === GOOD.priorKnowledge.length + 1;
+})());
+
+ok("removes an array item", (() => {
+  const n = GOOD.procedure.length;
+  const r = applyEdits(base(), [{ op: "remove", path: "/procedure/1" }]);
+  return r.doc.procedure.length === n - 1 && r.doc.procedure[1].title === "Board Summary";
+})());
+
+ok("never mutates the input document", (() => {
+  const input = base();
+  applyEdits(input, [{ path: "/coreConcept", value: "mutated" }]);
+  return input.coreConcept === GOOD.coreConcept;
+})());
+
+ok("applies several edits in one pass", (() => {
+  const r = applyEdits(base(), [
+    { path: "/procedure/1/minutes", value: 18 },
+    { path: "/procedure/2/minutes", value: 9 },
+  ]);
+  return r.applied.length === 2 && r.doc.procedure[1].minutes === 18 && r.doc.procedure[2].minutes === 9;
+})());
+
+// --- the hostile cases: these paths come from a language model ---
+ok("rejects a hallucinated field instead of creating it", (() => {
+  const r = applyEdits(base(), [{ path: "/madeUpSection", value: "nope" }]);
+  return !("madeUpSection" in r.doc) && r.rejected.length === 1 && !r.applied.length;
+})());
+
+ok("rejects a path through a field that does not exist", (() => {
+  const r = applyEdits(base(), [{ path: "/nope/deeper/x", value: 1 }]);
+  return r.rejected.length === 1 && !r.applied.length;
+})());
+
+ok("rejects an out-of-range array index", (() => {
+  const r = applyEdits(base(), [{ path: "/objectives/99/text", value: "x" }]);
+  return r.rejected.length === 1 && r.doc.objectives.length === GOOD.objectives.length;
+})());
+
+ok("blocks __proto__ pollution", (() => {
+  const r = applyEdits(base(), [{ path: "/__proto__/polluted", value: true }]);
+  return r.rejected.length === 1 && ({}).polluted === undefined;
+})());
+
+ok("blocks a constructor/prototype path", (() => {
+  const r = applyEdits(base(), [{ path: "/constructor/prototype/x", value: 1 }]);
+  return r.rejected.length === 1 && ({}).x === undefined;
+})());
+
+ok("rejects a malformed pointer", (() => {
+  const r = applyEdits(base(), [{ path: "objectives/0/text", value: "x" }]);
+  return r.rejected.length === 1;
+})());
+
+ok("rejects a replace with no value", (() => {
+  const r = applyEdits(base(), [{ path: "/coreConcept" }]);
+  return r.rejected.length === 1 && r.doc.coreConcept === GOOD.coreConcept;
+})());
+
+ok("keeps good edits when one in the batch is bad", (() => {
+  const r = applyEdits(base(), [
+    { path: "/coreConcept", value: "kept" },
+    { path: "/notAThing", value: "dropped" },
+  ]);
+  return r.doc.coreConcept === "kept" && r.applied.length === 1 && r.rejected.length === 1;
+})());
+
+ok("getAt reads a nested value", getAt(GOOD, "/procedure/0/title") === "Initiation Activity");
+ok("getAt returns undefined for a bad path", getAt(GOOD, "/procedure/9/title") === undefined);
+ok("parsePointer unescapes ~1 and ~0", JSON.stringify(parsePointer("/a~1b/c~0d")) === JSON.stringify(["a/b", "c~d"]));
+ok("sectionOf finds the top-level key", sectionOf("/objectives/1/text") === "objectives");
+
+console.log("\n\x1b[1mAddressable index\x1b[0m");
+const idx = buildIndex(GOOD);
+ok("indexes every leaf as a pointer", idx.length > 60, `got ${idx.length}`);
+ok("indexes an objective's text", idx.some(l => l.startsWith("/objectives/0/text = ")));
+ok("truncates long values", idx.every(l => l.length < 200));
+ok("every indexed path resolves", idx.every(l => getAt(GOOD, l.split(" = ")[0]) !== undefined));
 
 console.log(`\n\x1b[1m${pass} passed, ${fail} failed\x1b[0m\n`);
 process.exit(fail ? 1 : 0);

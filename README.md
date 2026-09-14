@@ -42,6 +42,9 @@ npm run dev                       # http://localhost:3000
 Get a free key at **https://openrouter.ai/keys**. Nothing in this project costs money to
 run: it routes between free models only.
 
+No key yet? Open the planner and click **See a finished sample plan** to view a complete,
+rubric-clean lesson plan without calling a model.
+
 ## The accuracy engine
 
 This is the part that makes the output usable rather than merely plausible.
@@ -80,6 +83,43 @@ A fabricated Cambridge objective code, or a page number for a book edition that 
 last year, is worse than a missing one — a supervisor will check it. So if the teacher
 leaves the page field blank, the validator **rejects any plan containing a page,
 chapter or code**, and the model is told to write "the unit named in the brief" instead.
+
+## Conversational editing
+
+Once a plan exists, a composer sits pinned at the bottom of the page. Type what should
+change, in English or Urdu, and only that part changes:
+
+> *make the starter a pair activity* · *objectives thodi aasaan kardo* ·
+> *add one more extension task* · *shorten the development by 5 minutes*
+
+The model does **not** return a rewritten plan. It returns a list of edits addressed by
+JSON Pointer:
+
+```json
+{ "summary": "Made the starter a pair activity.",
+  "edits": [ { "op": "replace", "path": "/procedure/0/teacherDoes", "value": "..." } ] }
+```
+
+That choice is what makes it usable. A whole-plan rewrite drifts in the 95% of fields
+you did not mention; a pointer edit cannot. It also means every change can be shown as
+a before/after diff, highlighted in the sheet, scored again, and undone.
+
+**The paths come from a language model, so they are treated as untrusted input.**
+`lib/patch.ts` rejects rather than creates: a path that does not already exist on the
+plan is dropped, not added, so a hallucinated field cannot appear in your lesson plan.
+`__proto__`, `constructor` and `prototype` segments are refused outright. Bad edits in a
+batch are dropped individually while the good ones still apply, and the result is
+re-parsed against the same zod schema the generator answers to — if an edit would break
+the plan's structure, nothing is applied at all.
+
+After every edit the eleven checks run again and the transcript shows the movement, so
+`Accuracy 100 → 96` tells you immediately that your instruction cost something. The
+`meta` section is locked: class, date and duration are edited in the form, not by chat,
+because those are facts about your timetable rather than judgements about the lesson.
+
+The **Precise** toggle controls how far the model may reach: on, it makes the smallest
+change that satisfies the request; off, it may restructure. The scope selector limits an
+edit to one section.
 
 ## The Skill
 

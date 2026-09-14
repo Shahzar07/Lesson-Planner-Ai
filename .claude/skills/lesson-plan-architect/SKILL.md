@@ -51,11 +51,25 @@ weight order, each with the concrete fix.
 - **Assume 40+ students, fixed benches, a blackboard and possible load-shedding.**
   Prices in rupees, names and contexts local.
 
+## Conversational editing
+
+`app/api/edit/route.ts` turns a teacher's chat message into JSON Pointer edits against
+an existing plan, rather than regenerating it. `lib/patch.ts` applies them and is
+deliberately hostile to its input: a path that does not already exist is rejected, not
+created, and prototype-chain segments are refused. If you change the plan schema, the
+addressable index in `buildIndex` follows automatically, but check that
+`scripts/engine.test.mjs` still covers the new shape.
+
+Never loosen `applyEdits` to create missing paths. The whole point is that a
+hallucinated field cannot reach a teacher's lesson plan.
+
 ## Working on the app itself
 
-- `npm test` runs the accuracy engine suite (no network needed) — 26 checks covering
-  every rubric rule and the tolerant JSON parser. Add a case here whenever you add or
-  change a rubric check.
+- `npm test` runs the accuracy engine suite (no network needed) — 50 checks covering
+  every rubric rule, the tolerant JSON parser and the patch layer. Add a case here
+  whenever you add or change a rubric check.
+- `lib/sample-plan.ts` is a complete plan that must score 100. If a rubric change makes
+  it score lower, fix the sample, not the check.
 - `npm run doctor` probes the configured OpenRouter key and prints a model chain built
   from whatever actually answered.
 - Changing a rubric check means changing three places in step: `lib/validator.ts`,

@@ -51,11 +51,14 @@ export default function PlanSheet({
   formatId,
   onRefine,
   refining,
+  changed = [],
 }: {
   plan: LessonPlan;
   formatId: string;
   onRefine?: (section: string) => void;
   refining?: string | null;
+  /** Top-level section keys a chat edit just touched, briefly highlighted. */
+  changed?: string[];
 }) {
   const fmt = FORMAT_BY_ID[formatId];
   const ur = fmt?.language === "ur";
@@ -64,7 +67,11 @@ export default function PlanSheet({
   const totalMinutes = plan.procedure.reduce((n, s) => n + (s.minutes || 0), 0);
 
   const S = ({ id, title, children }: { id: string; title: string; children: React.ReactNode }) => (
-    <section className="print-break border-t border-line pt-4">
+    <section
+      className={`print-break border-t border-line pt-4 transition-all duration-500 ${
+        changed.includes(id) ? "-mx-2 rounded-xl bg-lime/15 px-2 pb-2 ring-1 ring-lime-2" : ""
+      }`}
+    >
       <div className="mb-2 flex items-center gap-2">
         <h3 className={`flex-1 text-[12px] font-bold uppercase tracking-wider text-ink ${ur ? "urdu !text-[15px] !normal-case !tracking-normal" : ""}`}>
           {title}

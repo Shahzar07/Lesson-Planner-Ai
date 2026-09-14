@@ -1,13 +1,16 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { LessonPlan, LessonBrief, QualityReport } from "@/lib/types";
 import { CURRICULA, CURRICULUM_BY_ID, DURATIONS, CORE_SKILLS_EN, CORE_SKILLS_UR } from "@/lib/curricula";
 import { FORMATS } from "@/lib/formats";
 import PlanSheet from "./PlanSheet";
 import QualityPanel from "./QualityPanel";
+import PlanChat from "./PlanChat";
 import { downloadDocx } from "@/lib/export/docx";
+import { SAMPLE_PLAN } from "@/lib/sample-plan";
+import { validate } from "@/lib/validator";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -32,7 +35,16 @@ export default function Planner() {
   const [pass, setPass] = useState(1);
   const [error, setError] = useState("");
   const [refining, setRefining] = useState<string | null>(null);
+  /** Snapshots taken before each chat edit, so every change is reversible. */
+  const [undoStack, setUndoStack] = useState<{ plan: LessonPlan; quality: QualityReport | null }[]>([]);
+  const [changed, setChanged] = useState<string[]>([]);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Kept in a ref so applyChatEdit can snapshot without re-creating itself.
+  const planRef = useRef<{ plan: LessonPlan; quality: QualityReport | null } | null>(null);
+  useEffect(() => {
+    planRef.current = plan ? { plan, quality } : null;
+  }, [plan, quality]);
 
   const curriculum = CURRICULUM_BY_ID[brief.curriculum];
   const format = FORMATS.find((f) => f.id === brief.format);
@@ -64,6 +76,7 @@ export default function Planner() {
 
     setBusy(true); setError(""); setPlan(null); setQuality(null);
     setStreamText(""); setElapsed(undefined); setPass(1);
+    setUndoStack([]); setChanged([]);
     setStatus("Connecting to the model");
 
     try {
@@ -149,6 +162,54 @@ export default function Planner() {
     }
   };
 
+  /** Show a finished plan without spending a generation. */
+  const loadSample = useCallback(() => {
+    const sampleBrief: LessonBrief = {
+      ...INITIAL,
+      curriculum: "cambridge", grade: "Stage 4", subject: "Mathematics",
+      topic: "Equivalent Fractions", duration: 40, classStrength: "42",
+      averageAge: "9", lessonNo: "12", section: "B",
+      bookName: "Cambridge Primary Mathematics Learner's Book",
+      coreSkill: "Numeracy", format: "bed-english", language: "en",
+    };
+    setBrief(sampleBrief);
+    setPlan(SAMPLE_PLAN);
+    setQuality(validate(SAMPLE_PLAN, sampleBrief));
+    setModel(""); setElapsed(undefined); setPass(1);
+    setError(""); setUndoStack([]); setChanged([]);
+  }, []);
+
+  const applyChatEdit = useCallback(
+    (nextPlan: LessonPlan, nextQuality: QualityReport, changedSections: string[]) => {
+      setUndoStack((stack) => {
+        const snapshot = planRef.current;
+        return snapshot ? [...stack.slice(-19), snapshot] : stack;
+      });
+      setPlan(nextPlan);
+      setQuality(nextQuality);
+      setChanged(changedSections);
+    },
+    [],
+  );
+
+  const undoChatEdit = useCallback(() => {
+    setUndoStack((stack) => {
+      if (!stack.length) return stack;
+      const prev = stack[stack.length - 1];
+      setPlan(prev.plan);
+      setQuality(prev.quality);
+      setChanged([]);
+      return stack.slice(0, -1);
+    });
+  }, []);
+
+  // Highlights fade on their own so the sheet does not stay lit up.
+  useEffect(() => {
+    if (!changed.length) return;
+    const t = setTimeout(() => setChanged([]), 2600);
+    return () => clearTimeout(t);
+  }, [changed]);
+
   const streamPreview = useMemo(() => {
     if (!streamText) return "";
     // Show the human-readable values arriving, not raw JSON punctuation.
@@ -165,17 +226,17 @@ export default function Planner() {
             <span className="grid h-7 w-7 place-items-center rounded-lg bg-ink text-[13px] font-bold text-lime">س</span>
             <span className="wordmark text-[15px]">Sabaq</span>
           </Link>
-          <span className="hidden text-[12px] text-faint sm:inline">Lesson planner</span>
+          <span className="hidden text-[12px] text-faint md:inline">Lesson planner</span>
 
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
             {plan && (
               <>
-                <button onClick={() => window.print()} className="btn btn-ghost h-9 px-3.5 text-[12.5px]">Print / PDF</button>
-                <button onClick={() => downloadDocx(plan, brief.format)} className="btn btn-ghost h-9 px-3.5 text-[12.5px]">Word</button>
+                <button onClick={() => window.print()} className="btn btn-ghost h-9 px-3 text-[12.5px]"><span className="hidden sm:inline">Print / </span>PDF</button>
+                <button onClick={() => downloadDocx(plan, brief.format)} className="btn btn-ghost h-9 px-3 text-[12.5px]">Word</button>
               </>
             )}
-            <button onClick={generate} disabled={busy || !brief.topic.trim()} className="btn btn-lime h-9 px-4 text-[12.5px]">
-              {busy ? "Writing…" : plan ? "Regenerate" : "Generate plan"}
+            <button onClick={generate} disabled={busy || !brief.topic.trim()} className="btn btn-lime h-9 px-3.5 text-[12.5px]">
+              {busy ? "Writing…" : plan ? "Regenerate" : "Generate"}
             </button>
           </div>
         </div>
@@ -390,6 +451,9 @@ export default function Planner() {
                   Pick the curriculum and format on the left, type a topic, and Sabaq will
                   write the full plan, score it against eleven checks and repair whatever fails.
                 </p>
+                <button onClick={loadSample} className="btn btn-ghost mt-5 px-4">
+                  See a finished sample plan
+                </button>
                 <div className="mt-5 flex flex-wrap justify-center gap-1.5">
                   {["Equivalent fractions", "Photosynthesis", "اسمِ صفت", "Persuasive writing", "Newton's second law"].map((t) => (
                     <button key={t} onClick={() => set("topic", t)} className={`chip ${/[؀-ۿ]/.test(t) ? "urdu" : ""}`}>
@@ -402,6 +466,7 @@ export default function Planner() {
           )}
 
           {plan && (
+            <>
             <div className="card p-5 sm:p-7">
               {busy && (
                 <div className="no-print mb-4 flex items-center gap-2 rounded-lg bg-wash px-3 py-2">
@@ -409,8 +474,24 @@ export default function Planner() {
                   <span className="text-[11.5px] text-muted">{status || "Refining"}</span>
                 </div>
               )}
-              <PlanSheet plan={plan} formatId={brief.format} onRefine={refine} refining={refining} />
+              <PlanSheet
+                plan={plan}
+                formatId={brief.format}
+                onRefine={refine}
+                refining={refining}
+                changed={changed}
+              />
             </div>
+
+            <PlanChat
+              plan={plan}
+              brief={brief}
+              quality={quality}
+              onApply={applyChatEdit}
+              onUndo={undoChatEdit}
+              canUndo={undoStack.length > 0}
+            />
+          </>
           )}
         </section>
       </div>
