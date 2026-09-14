@@ -14,12 +14,12 @@ export default function AppMock() {
         </div>
       </div>
 
-      <div className="grid grid-cols-[150px_1fr] md:grid-cols-[168px_1fr_190px]">
+      <div className="grid grid-cols-1 sm:grid-cols-[150px_1fr] md:grid-cols-[168px_1fr_190px]">
         {/* sidebar */}
-        <aside className="border-r border-line bg-wash/60 p-3">
+        <aside className="hidden border-r border-line bg-wash/60 p-3 sm:block">
           <div className="mb-3 flex items-center gap-2">
             <span className="grid h-6 w-6 place-items-center rounded-md bg-ink text-[10px] font-bold text-lime">س</span>
-            <span className="text-[12px] font-bold tracking-tight">Sabaq</span>
+            <span className="wordmark text-[12.5px]">Sabaq</span>
           </div>
           {[
             ["New plan", true],
@@ -56,7 +56,7 @@ export default function AppMock() {
             <span className="rounded-full border border-line px-2 py-0.5 text-[9.5px] text-muted">40 min</span>
           </div>
 
-          <h4 className="text-[15px] font-bold tracking-tight">Equivalent Fractions</h4>
+          <h4 className="display-sm text-[16px]">Equivalent Fractions</h4>
           <p className="mt-0.5 text-[10.5px] text-faint">B.Ed Standard format · Lesson 12</p>
 
           <div className="mt-3 space-y-2.5">

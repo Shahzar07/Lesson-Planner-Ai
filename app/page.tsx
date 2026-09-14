@@ -37,7 +37,7 @@ function Nav() {
       <nav className="glass mx-auto flex h-14 max-w-6xl items-center gap-4 rounded-full border border-white/70 px-4 shadow-[0_8px_30px_-16px_rgb(10_16_22/.25)]">
         <Link href="#top" className="flex items-center gap-2 pr-2">
           <span className="grid h-7 w-7 place-items-center rounded-lg bg-ink text-[13px] font-bold text-lime">س</span>
-          <span className="text-[15px] font-bold tracking-tight">Sabaq</span>
+          <span className="wordmark text-[16px]">Sabaq</span>
         </Link>
         <ul className="ml-auto hidden items-center gap-1 md:flex">
           {links.map(([label, href]) => (
@@ -73,13 +73,13 @@ function Hero() {
         </Reveal>
 
         <Reveal delay={60}>
-          <h1 className="display mx-auto max-w-[19ch] text-center text-[40px] sm:text-[56px] md:text-[68px]">
+          <h1 className="display mx-auto max-w-[19ch] text-balance text-center text-[42px] sm:text-[58px] md:text-[72px]">
             Lesson plans that pass inspection.
           </h1>
         </Reveal>
 
         <Reveal delay={120}>
-          <p className="mx-auto mt-5 max-w-[58ch] text-center text-[15px] leading-relaxed text-muted md:text-[16px]">
+          <p className="mx-auto mt-5 max-w-[50ch] text-balance text-center text-[15px] leading-relaxed text-muted md:text-[16.5px]">
             Sabaq writes a complete B.Ed-standard lesson plan in your school&rsquo;s exact
             format, in English or اردو, and then checks its own work against eleven
             quality rules before it hands it to you.
@@ -126,7 +126,7 @@ function TrustStrip() {
         </p>
         <div className="flex flex-wrap items-center justify-center gap-x-8 gap-y-3">
           {items.map((t) => (
-            <span key={t} className="text-[13px] font-semibold tracking-tight text-[#9dadb9]">
+            <span key={t} className="display-sm text-[14px] text-[#9dadb9]">
               {t}
             </span>
           ))}
@@ -273,7 +273,7 @@ function Features() {
           <h2 className="display mx-auto mt-3 max-w-[16ch] text-[32px] md:text-[42px]">
             Structured, not generic.
           </h2>
-          <p className="mx-auto mt-4 max-w-[54ch] text-[15px] leading-relaxed text-muted">
+          <p className="mx-auto mt-4 max-w-[50ch] text-balance text-[15px] leading-relaxed text-muted">
             Three things decide whether a plan is usable tomorrow morning: the format, the
             curriculum behind it, and whether anyone checked it.
           </p>
@@ -352,7 +352,7 @@ function FeatureCard({ title, body, children }: { title: string; body: string; c
   return (
     <div className="card flex h-full flex-col p-5">
       <div className="mb-4 rounded-xl bg-wash/70 p-3">{children}</div>
-      <h3 className="text-[16px] font-bold leading-snug tracking-tight">{title}</h3>
+      <h3 className="display-sm text-[17px]">{title}</h3>
       <p className="mt-2 text-[13px] leading-relaxed text-muted">{body}</p>
     </div>
   );
@@ -415,7 +415,7 @@ function Audience() {
                     {String(i + 1).padStart(2, "0")}
                   </span>
                   <div>
-                    <div className="text-[15px] font-semibold tracking-tight">{t}</div>
+                    <div className="display-sm text-[16px]">{t}</div>
                     <div className="mt-0.5 text-[13px] leading-relaxed text-muted">{d}</div>
                   </div>
                 </li>
@@ -462,7 +462,7 @@ function Samples() {
           <h2 className="display mx-auto mt-3 max-w-[20ch] text-[32px] md:text-[42px]">
             This is the level of detail you get.
           </h2>
-          <p className="mx-auto mt-4 max-w-[52ch] text-[15px] leading-relaxed text-muted">
+          <p className="mx-auto mt-4 max-w-[48ch] text-balance text-[15px] leading-relaxed text-muted">
             Not &ldquo;ask questions about the topic&rdquo;. The actual question, the answer to listen
             for, and what to do when the class does not give it.
           </p>
@@ -569,7 +569,7 @@ function Footer() {
           <div>
             <div className="flex items-center gap-2">
               <span className="grid h-7 w-7 place-items-center rounded-lg bg-lime text-[13px] font-bold text-ink">س</span>
-              <span className="text-[15px] font-bold tracking-tight">Sabaq</span>
+              <span className="wordmark text-[16px]">Sabaq</span>
             </div>
             <p className="mt-3 max-w-[30ch] text-[13px] leading-relaxed text-white/45">
               Lesson planning built for Pakistani classrooms, in the format your supervisor
@@ -595,7 +595,7 @@ function Footer() {
 
         <div className="select-none pb-2 pt-4 text-center">
           <span
-            className="block bg-gradient-to-b from-white/16 to-white/[0.02] bg-clip-text font-bold tracking-[-0.05em] text-transparent"
+            className="wordmark block bg-gradient-to-b from-white/16 to-white/[0.02] bg-clip-text text-transparent"
             style={{ fontSize: "clamp(54px, 17vw, 240px)", lineHeight: 0.85 }}
           >
             Sabaq

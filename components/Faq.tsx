@@ -52,7 +52,7 @@ export default function Faq() {
               aria-expanded={isOpen}
               className="flex w-full items-center gap-3 px-4 py-3.5 text-left"
             >
-              <span className={`flex-1 text-[14px] font-semibold leading-snug tracking-tight ${isUrdu ? "urdu" : ""}`}>
+              <span className={`flex-1 text-[15px] ${isUrdu ? "urdu font-semibold" : "display-sm"}`}>
                 {q}
               </span>
               <span

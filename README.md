@@ -131,6 +131,27 @@ SABAQ_MODELS_EN=deepseek/deepseek-chat-v3-0324:free,...   # in .env.local
 SABAQ_MODELS_UR=qwen/qwen3-235b-a22b:free,...
 ```
 
+## Typography
+
+Two self-hosted variable fonts, wired through `next/font/local` in `app/layout.tsx`:
+
+| Role | Face | Why |
+|---|---|---|
+| Display | **Bricolage Grotesque** 800 | Tight, heavy, optically sized. Holds its density at 72px where a neutral UI face goes limp. |
+| Text / UI | **Plus Jakarta Sans** 400–800 | Legible at 11–16px, which Bricolage is not. |
+| Urdu | **Noto Nastaliq Urdu** | Proper Nastaliq for the سبقی خاکہ, not a naskh fallback. |
+
+Self-hosted rather than linked, which matters here: there is no render-blocking request
+to a font CDN, no third-party DNS lookup on a slow Pakistani mobile connection, and no
+flash of fallback text. `next/font/local` fingerprints the files, preloads them and
+derives fallback metrics so nothing shifts when they swap in. The Urdu face carries
+`preload: false`, so its 239 KB only downloads on a page that actually renders Urdu.
+
+Three CSS classes carry the system: `.display` (hero and section headings),
+`.display-sm` (card and panel headings) and `.wordmark` (the brand lockups). The
+`--ff-*` variables injected by `next/font` are deliberately named apart from Tailwind's
+`--font-*` theme tokens, which are defined in `@theme` and cannot reference themselves.
+
 ## Project layout
 
 ```

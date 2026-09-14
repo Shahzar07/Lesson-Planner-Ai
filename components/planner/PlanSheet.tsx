@@ -99,7 +99,7 @@ export default function PlanSheet({
     <article className="print-sheet bg-white">
       {/* ------------------------------ header ------------------------------ */}
       <header className={`mb-5 ${ur ? "urdu" : ""}`}>
-        <h2 className="text-center text-[17px] font-bold tracking-tight">{t.lessonPlan}</h2>
+        <h2 className={`text-center text-[19px] ${ur ? "font-bold" : "display-sm"}`}>{t.lessonPlan}</h2>
         <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 text-[12.5px] sm:grid-cols-3">
           {([
             [t.no, plan.meta.lessonNo], [t.date, plan.meta.date], [t.cls, plan.meta.grade],

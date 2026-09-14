@@ -163,7 +163,7 @@ export default function Planner() {
         <div className="mx-auto flex h-14 max-w-[1500px] items-center gap-3 px-4">
           <Link href="/" className="flex items-center gap-2">
             <span className="grid h-7 w-7 place-items-center rounded-lg bg-ink text-[13px] font-bold text-lime">س</span>
-            <span className="text-[14px] font-bold tracking-tight">Sabaq</span>
+            <span className="wordmark text-[15px]">Sabaq</span>
           </Link>
           <span className="hidden text-[12px] text-faint sm:inline">Lesson planner</span>
 
@@ -185,7 +185,7 @@ export default function Planner() {
         {/* ------------------------------- form ------------------------------- */}
         <aside className="no-print lg:sticky lg:top-[72px] lg:max-h-[calc(100vh-88px)] lg:overflow-y-auto lg:pr-1 thin-scroll">
           <div className="card p-4">
-            <h2 className="text-[13px] font-bold tracking-tight">The brief</h2>
+            <h2 className="display-sm text-[15px]">The brief</h2>
             <p className="mt-0.5 text-[11.5px] text-faint">Only the topic is required. Everything else sharpens the plan.</p>
 
             {/* curriculum */}
@@ -366,7 +366,7 @@ export default function Planner() {
             <div className="card p-6">
               <div className="flex items-center gap-2.5">
                 <span className="live-dot h-2 w-2 rounded-full bg-grass" />
-                <span className="text-[13px] font-semibold tracking-tight">{status || "Working"}</span>
+                <span className="display-sm text-[14px]">{status || "Working"}</span>
               </div>
               <div className="mt-4 space-y-2">
                 {[92, 78, 85, 60].map((w, i) => (
@@ -385,7 +385,7 @@ export default function Planner() {
             <div className="card grid min-h-[380px] place-items-center p-8 text-center">
               <div>
                 <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-wash text-[20px]">✳</div>
-                <h3 className="text-[16px] font-bold tracking-tight">Your lesson plan appears here</h3>
+                <h3 className="display-sm text-[18px]">Your lesson plan appears here</h3>
                 <p className="mx-auto mt-2 max-w-[42ch] text-[13px] leading-relaxed text-muted">
                   Pick the curriculum and format on the left, type a topic, and Sabaq will
                   write the full plan, score it against eleven checks and repair whatever fails.

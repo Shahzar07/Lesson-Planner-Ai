@@ -23,10 +23,10 @@ export default function QualityPanel({ report, model, elapsedMs, pass }: {
               style={{ transition: "stroke-dasharray .8s cubic-bezier(.22,1,.36,1)" }}
             />
           </svg>
-          <span className="text-[15px] font-bold tabular-nums tracking-tight">{report.score}</span>
+          <span className="display-sm text-[16px] tabular-nums">{report.score}</span>
         </div>
         <div className="min-w-0">
-          <div className="text-[13px] font-bold tracking-tight">Accuracy score</div>
+          <div className="display-sm text-[14px]">Accuracy score</div>
           <div className="text-[11.5px] text-faint">
             {report.failures.length === 0
               ? "All eleven checks passed"
